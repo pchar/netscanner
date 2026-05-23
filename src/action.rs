@@ -42,7 +42,6 @@ pub enum Action {
     Scan(Vec<WifiInfo>),
     AppModeChange(Mode),
     ModeChange(Mode),
-    PingIp(String),
     PingIpResponded(String),
     CountIp,
     CidrError,
