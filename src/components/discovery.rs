@@ -820,6 +820,7 @@ impl Component for Discovery {
                     }
                     Ok(Some(Action::ModeChange(Mode::Normal)))
                 }
+                KeyCode::Esc => Ok(None),
                 _ => {
                     self.input.handle_event(&Event::Key(key));
                     Ok(Some(Action::Refresh))
