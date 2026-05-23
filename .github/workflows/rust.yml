@@ -8,7 +8,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RELEASE_TAG: 0.6.41-1
 
 jobs:
   build:
@@ -17,6 +16,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Install system dependencies
       run: sudo apt-get update && sudo apt-get install -y libpcap-dev
@@ -27,16 +28,35 @@ jobs:
     - name: Run tests
       run: cargo test --verbose
 
+    - name: Tag successful build
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: |
+        # Get latest tag and increment patch version
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        VERSION=${LATEST_TAG#v}
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+        PATCH=$((PATCH + 1))
+        NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+        if ! git tag | grep -q "^${NEW_TAG}$"; then
+          git tag "$NEW_TAG"
+          git push origin "$NEW_TAG" 2>/dev/null || true
+          echo "Tagged $NEW_TAG"
+        else
+          echo "Tag $NEW_TAG already exists"
+        fi
+
     - name: Install cargo-deb
       run: cargo install cargo-deb
 
     - name: Create Debian package
       run: cargo deb
+      env:
+        RELEASE_TAG: ${{ github.ref_name }}
 
     - name: Upload Netscanner Debian Package (amd64)
       uses: actions/upload-artifact@v4
       with:
-        name: netscanner_${{ env.RELEASE_TAG }}_amd64.deb
+        name: netscanner_${{ github.ref_name }}_amd64.deb
         path: target/debian/*.deb
 
     - name: Release
