@@ -48,6 +48,10 @@ pub enum Action {
     PacketDump(DateTime<Local>, PacketsInfoTypesEnum, PacketTypeEnum),
     PortScan(usize, u16),
     PortScanDone(usize),
+    SniffIpResolved {
+        ip: std::net::IpAddr,
+        hostname: String,
+    },
     Clear,
     Export,
     ExportData(ExportData),

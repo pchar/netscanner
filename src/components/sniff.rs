@@ -1,20 +1,10 @@
 use color_eyre::eyre::Result;
 use color_eyre::owo_colors::OwoColorize;
-use dns_lookup::{lookup_addr, lookup_host};
+use dns_lookup::lookup_addr;
 
 use ipnetwork::IpNetwork;
-use pnet::{
-    datalink::NetworkInterface,
-    packet::{
-        arp::{ArpHardwareTypes, ArpOperations, ArpPacket, MutableArpPacket},
-        ethernet::{EtherTypes, MutableEthernetPacket},
-        MutablePacket, Packet,
-    },
-};
-use ratatui::style::Stylize;
-
-use ratatui::{prelude::*, widgets::*};
 use std::net::IpAddr;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tui_scrollview::{ScrollView, ScrollViewState};
 
@@ -28,6 +18,8 @@ use crate::{
     utils::bytes_convert,
     widgets::scroll_traffic::TrafficScroll,
 };
+use ratatui::style::Stylize;
+use ratatui::{prelude::*, widgets::*};
 
 #[derive(Clone, Debug)]
 pub struct IPTraffic {
@@ -91,11 +83,21 @@ impl Sniffer {
                 ip_entry.download += length as f64;
             }
         } else {
+            // Use tokio::spawn for DNS lookup so it doesn't block the main event loop
+            let ip = destination;
+            let tx = self.action_tx.clone();
+            tokio::spawn(async move {
+                let hostname = lookup_addr(&ip).unwrap_or_default();
+                if let Some(tx) = tx {
+                    let _ = tx.send(Action::SniffIpResolved { ip, hostname });
+                }
+            });
+
             self.traffic_ips.push(IPTraffic {
                 ip: destination,
                 download: length as f64,
                 upload: 0.0,
-                hostname: lookup_addr(&destination).unwrap_or(String::from("unknown")),
+                hostname: String::from(""),
             });
         }
 
@@ -105,11 +107,21 @@ impl Sniffer {
                 ip_entry.upload += length as f64;
             }
         } else {
+            // Use tokio::spawn for DNS lookup so it doesn't block the main event loop
+            let ip = source;
+            let tx = self.action_tx.clone();
+            tokio::spawn(async move {
+                let hostname = lookup_addr(&ip).unwrap_or_default();
+                if let Some(tx) = tx {
+                    let _ = tx.send(Action::SniffIpResolved { ip, hostname });
+                }
+            });
+
             self.traffic_ips.push(IPTraffic {
                 ip: source,
                 download: 0.0,
                 upload: length as f64,
-                hostname: lookup_addr(&source).unwrap_or(String::from("unknown")),
+                hostname: String::from(""),
             });
         }
 
@@ -357,11 +369,18 @@ impl Component for Sniffer {
             self.active_inft_ips = interface.ips.clone();
         }
 
-        if let Action::PacketDump(time, packet, packet_type) = action {
+        if let Action::PacketDump(time, ref packet, packet_type) = action {
             match packet_type {
-                PacketTypeEnum::Tcp => self.process_packet(packet),
-                PacketTypeEnum::Udp => self.process_packet(packet),
+                PacketTypeEnum::Tcp => self.process_packet(packet.clone()),
+                PacketTypeEnum::Udp => self.process_packet(packet.clone()),
                 _ => {}
+            }
+        }
+
+        // Handle resolved IP hostname from network executor
+        if let Action::SniffIpResolved { ip, hostname } = action {
+            if let Some(entry) = self.traffic_ips.iter_mut().find(|e| e.ip == ip) {
+                entry.hostname = hostname;
             }
         }
 

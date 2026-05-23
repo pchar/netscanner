@@ -12,10 +12,8 @@ use port_desc::{PortDescription, TransportProtocol};
 use ratatui::{prelude::*, widgets::*};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::{string, time::Duration};
-use tokio::{
-    net::TcpStream,
-    sync::mpsc::{self, UnboundedSender},
-};
+use tokio::net::TcpStream;
+use tokio::sync::mpsc::UnboundedSender;
 
 use super::Component;
 use crate::enums::COMMON_PORTS;
@@ -166,10 +164,11 @@ impl Ports {
         let ip: IpAddr = self.ip_ports[index].ip.parse().unwrap();
         let ports_box = Box::new(COMMON_PORTS.iter());
 
-        tokio::spawn(async move {
+        // Run TCP port scanning on a tokio worker thread so it doesn't block the event loop
+        let _handle = tokio::spawn(async move {
             let ports = stream::iter(ports_box);
             ports
-                .for_each_concurrent(POOL_SIZE, |port| {
+                .for_each_concurrent(3, |port| {
                     Self::scan(tx.clone(), index, ip, port.to_owned(), 2)
                 })
                 .await;

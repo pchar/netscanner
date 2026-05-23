@@ -260,52 +260,59 @@ impl Discovery {
                     let ips = get_ips4_from_cidr(cidr);
                     let ips_vec: Vec<Ipv4Addr> = ips.to_vec();
 
-                    // Use std::thread::spawn (not spawn_blocking) for a truly
-                    // independent thread with no connection to the outer runtime.
+                    // Exactly 3 worker threads for network background tasks.
+                    // Each thread does blocking ICMP syscalls (sendto/recvfrom)
+                    // so they never block the main event loop.
                     let tx_thread = tx.clone();
-                    std::thread::spawn(move || {
-                        // Build a new single-threaded runtime on this independent thread.
-                        // This runtime is completely separate from the main event loop.
-                        let rt = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                            .expect("Failed to build mini runtime");
+                    let num_threads = 3;
 
-                        rt.block_on(async {
-                            let semaphore = Arc::new(Semaphore::new(POOL_SIZE));
+                    // Split IPs across 3 threads
+                    let chunk_size = (ips_vec.len() + num_threads - 1) / num_threads;
+                    let chunks: Vec<_> = ips_vec
+                        .chunks(chunk_size)
+                        .map(|c| c.to_vec())
+                        .collect();
 
-                            stream::iter(ips_vec)
-                                .for_each_concurrent(POOL_SIZE, |ip| {
-                                    let tx = tx_thread.clone();
-                                    let s = semaphore.clone();
-                                    async move {
-                                        let _permit = s.acquire().await.unwrap();
-                                        let client =
-                                            Client::new(&Config::default()).expect("Cannot create client");
-                                        let payload = [0; 56];
-                                        let mut pinger = client
-                                            .pinger(IpAddr::V4(ip), PingIdentifier(random()))
-                                            .await;
-                                        pinger.timeout(Duration::from_secs(2));
+                    for ips in chunks {
+                        let tx = tx_thread.clone();
+                        // Run blocking ICMP syscalls directly on this OS thread
+                        // (no tokio runtime needed since pings are blocking)
+                        std::thread::spawn(move || {
+                            for ip in ips {
+                                let tx = tx.clone();
+                                // surge_ping's async API needs a tokio runtime, so we spawn
+                                // a mini runtime on this thread to run the blocking pinger
+                                let rt = tokio::runtime::Builder::new_current_thread()
+                                    .enable_all()
+                                    .build()
+                                    .expect("Failed to build worker runtime");
+                                rt.block_on(async {
+                                    let client =
+                                        Client::new(&Config::default()).expect("Cannot create client");
+                                    let payload = [0; 56];
+                                    let mut pinger = client
+                                        .pinger(IpAddr::V4(ip), PingIdentifier(random()))
+                                        .await;
+                                    pinger.timeout(Duration::from_secs(2));
 
-                                        match pinger.ping(PingSequence(2), &payload).await {
-                                            Ok((IcmpPacket::V4(packet), _)) => {
-                                                tx.send(Action::PingIp(packet.get_real_dest().to_string()))
-                                                    .unwrap_or_default();
-                                                tx.send(Action::CountIp).unwrap_or_default();
-                                            }
-                                            Ok(_) => {
-                                                tx.send(Action::CountIp).unwrap_or_default();
-                                            }
-                                            Err(_) => {
-                                                tx.send(Action::CountIp).unwrap_or_default();
-                                            }
+                                    match pinger.ping(PingSequence(2), &payload).await {
+                                        Ok((IcmpPacket::V4(packet), _)) => {
+                                            tx.send(Action::PingIp(packet.get_real_dest().to_string()))
+                                                .unwrap_or_default();
+                                            tx.send(Action::CountIp).unwrap_or_default();
+                                        }
+                                        Ok((IcmpPacket::V6(_), _)) => {
+                                            // IPv6 pings - just count as complete
+                                            tx.send(Action::CountIp).unwrap_or_default();
+                                        }
+                                        Err(_) => {
+                                            tx.send(Action::CountIp).unwrap_or_default();
                                         }
                                     }
-                                })
-                                .await;
+                                });
+                            }
                         });
-                    });
+                    }
                 }
             });
         };

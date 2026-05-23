@@ -166,7 +166,8 @@ impl WifiScan {
 
     pub fn scan(&mut self) {
         let tx = self.action_tx.clone().unwrap();
-        tokio::spawn(async move {
+        // Run WiFi scan on a tokio worker thread so it doesn't block the event loop
+        let _handle = tokio::spawn(async move {
             let networks = tokio_wifiscanner::scan().await;
             match networks {
                 Ok(nets) => {
@@ -193,14 +194,10 @@ impl WifiScan {
                         }
                     }
 
-                    let t_send = tx.send(Action::Scan(wifi_nets));
-                    match t_send {
-                        Ok(n) => (),
-                        Err(e) => (),
-                    }
+                    tx.send(Action::Scan(wifi_nets)).ok();
                 }
-                Err(_e) => (),
-            };
+                Err(_e) => {}
+            }
         });
     }
 

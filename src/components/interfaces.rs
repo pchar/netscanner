@@ -94,7 +94,15 @@ impl Interfaces {
         let elapsed = (now - self.last_update_time).as_secs_f64();
         if elapsed > 5.0 {
             self.last_update_time = now;
-            self.get_interfaces();
+            // pnet::datalink::interfaces() is a blocking syscall
+            // Run in spawn_blocking to not block the event loop
+            let tx = self.action_tx.clone().unwrap();
+            tokio::task::spawn_blocking(move || {
+                let interfaces = datalink::interfaces();
+                if !interfaces.is_empty() {
+                    let _ = tx.send(Action::ActiveInterface(interfaces[0].clone()));
+                }
+            });
         }
         Ok(())
     }
