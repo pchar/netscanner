@@ -2,7 +2,7 @@ use color_eyre::eyre::Result;
 use pnet::datalink::{self, NetworkInterface};
 use ratatui::{prelude::*, widgets::*};
 use std::collections::HashMap;
-use std::process::{Command, Output};
+use std::process::Command;
 use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -23,10 +23,6 @@ struct WifiConn {
     ssid: String,
     channel: String,
     txpower: String,
-}
-
-struct CommandError {
-    desc: String,
 }
 
 pub struct WifiInterface {
@@ -61,25 +57,7 @@ impl WifiInterface {
         Ok(())
     }
 
-    fn iw_command(&mut self, intf_name: String) -> Result<Output, CommandError> {
-        let iw_output = Command::new("iw")
-            .arg("dev")
-            .arg(intf_name)
-            .arg("info")
-            .output()
-            .map_err(|e| CommandError {
-                desc: format!("command failed: {}", e),
-            })?;
-        if iw_output.status.success() {
-            Ok(iw_output)
-        } else {
-            Err(CommandError {
-                desc: "command failed".to_string(),
-            })
-        }
-    }
-
-    fn parse_iw_command(&mut self, output: String) -> WifiConn {
+    fn parse_iw_output(output: &str) -> Option<WifiConn> {
         let lines = output.lines();
         let mut hash = HashMap::new();
         for l in lines {
@@ -88,17 +66,21 @@ impl WifiInterface {
                 hash.insert(split[0], split[1].trim());
             }
         }
-        WifiConn {
+        let ssid = hash
+            .get("ssid")
+            .unwrap_or(&"")
+            .parse::<String>()
+            .unwrap_or_default();
+        if ssid.is_empty() {
+            return None;
+        }
+        Some(WifiConn {
             interface: hash
                 .get("Interface")
                 .unwrap_or(&"")
                 .parse::<String>()
-                .unwrap_or(String::from("")),
-            ssid: hash
-                .get("ssid")
-                .unwrap_or(&"")
-                .parse::<String>()
-                .unwrap_or(String::from("")),
+                .unwrap_or_default(),
+            ssid,
             ifindex: hash
                 .get("ifindex")
                 .unwrap_or(&"")
@@ -108,28 +90,46 @@ impl WifiInterface {
                 .get("addr")
                 .unwrap_or(&"")
                 .parse::<String>()
-                .unwrap_or(String::from("")),
+                .unwrap_or_default(),
             channel: hash
                 .get("channel")
                 .unwrap_or(&"")
                 .parse::<String>()
-                .unwrap_or(String::from("")),
+                .unwrap_or_default(),
             txpower: hash
                 .get("txpower")
                 .unwrap_or(&"")
                 .parse::<String>()
-                .unwrap_or(String::from("")),
-        }
+                .unwrap_or_default(),
+        })
     }
 
     fn get_connected_wifi_info(&mut self) {
-        let interfaces = datalink::interfaces();
-        for i in interfaces {
-            if let Ok(output) = self.iw_command(i.name) {
-                let o = String::from_utf8(output.stdout).unwrap_or(String::from(""));
-                self.wifi_info = Some(self.parse_iw_command(o));
+        let tx = self.action_tx.clone();
+        // Use tokio::spawn so blocking pnet::datalink::interfaces() and
+        // Command::output() don't block the main event loop
+        tokio::spawn(async move {
+            let interfaces = datalink::interfaces();
+            for i in interfaces {
+                let intf_name = i.name.clone();
+                if let Some(output) = Command::new("iw")
+                    .arg("dev")
+                    .arg(&intf_name)
+                    .arg("info")
+                    .output()
+                    .ok()
+                {
+                    if output.status.success() {
+                        let o = String::from_utf8(output.stdout).unwrap_or_default();
+                        if let Some(conn) = Self::parse_iw_output(&o) {
+                            // No action to send - the component manages its own state
+                            return Some(conn);
+                        }
+                    }
+                }
             }
-        }
+            None
+        });
     }
 
     fn make_list(&mut self) -> List<'_> {
