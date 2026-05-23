@@ -937,49 +937,12 @@ impl PacketDump {
                             .alignment(Alignment::Right),
                     )
                     .title(
-                        ratatui::widgets::block::Title::from(Line::from(vec![
-                            Span::raw("|"),
-                            Span::styled(
-                                "e",
-                                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
-                            ),
-                            Span::styled("xport data", Style::default().fg(Color::Yellow)),
-                            Span::raw("|"),
-                        ]))
-                        .alignment(Alignment::Left)
-                        .position(ratatui::widgets::block::Position::Bottom),
-                    )
-                    .title(
-                        ratatui::widgets::block::Title::from(Span::styled(
-                            "|Packets|",
-                            Style::default().fg(Color::Yellow),
-                        ))
-                        .position(ratatui::widgets::block::Position::Top)
-                        .alignment(Alignment::Right),
-                    )
-                    .title(
                         ratatui::widgets::block::Title::from(Line::from(type_titles))
                             .position(ratatui::widgets::block::Position::Top)
                             .alignment(Alignment::Left),
                     )
-                    .title(
-                        ratatui::widgets::block::Title::from(Line::from(vec![
-                            Span::styled("|", Style::default().fg(Color::Yellow)),
-                            Span::styled(
-                                String::from(char::from_u32(0x25b2).unwrap_or('>')),
-                                Style::default().fg(Color::Red),
-                            ),
-                            Span::styled(
-                                String::from(char::from_u32(0x25bc).unwrap_or('>')),
-                                Style::default().fg(Color::Red),
-                            ),
-                            Span::styled("select|", Style::default().fg(Color::Yellow)),
-                        ]))
-                        .position(ratatui::widgets::block::Position::Bottom)
-                        .alignment(Alignment::Right),
-                    )
                     .border_style(Style::default().fg(Color::Rgb(100, 100, 100)))
-                    .borders(Borders::ALL) // .padding(Padding::new(1, 0, 2, 0)),
+                    .borders(Borders::ALL)
                     .border_type(DEFAULT_BORDER_STYLE),
             )
             .highlight_symbol(Span::styled(

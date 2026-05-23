@@ -481,59 +481,10 @@ impl Discovery {
 
         let mut block = Block::new()
             .title(
-                ratatui::widgets::block::Title::from("|Discovery|".yellow())
-                    .position(ratatui::widgets::block::Position::Top)
-                    .alignment(Alignment::Right),
-            )
-            .title(
-                ratatui::widgets::block::Title::from(Line::from(vec![
-                    Span::styled("|", Style::default().fg(Color::Yellow)),
-                    Span::styled(
-                        "e",
-                        Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
-                    ),
-                    Span::styled("xport data", Style::default().fg(Color::Yellow)),
-                    Span::styled("|", Style::default().fg(Color::Yellow)),
-                ]))
-                .alignment(Alignment::Left)
-                .position(ratatui::widgets::block::Position::Bottom),
-            )
-            .title(
                 ratatui::widgets::block::Title::from(Line::from(scan_title))
                     .position(ratatui::widgets::block::Position::Top)
                     .alignment(Alignment::Left),
             );
-
-        if is_scanning {
-            block = block.title(
-                ratatui::widgets::block::Title::from(Line::from(vec![
-                    Span::styled("|", Style::default().fg(Color::Yellow)),
-                    Span::styled(
-                        "s",
-                        Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
-                    ),
-                    Span::styled("top ", Style::default().fg(Color::Yellow)),
-                    Span::styled(
-                        "k",
-                        Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
-                    ),
-                    Span::styled("|", Style::default().fg(Color::Yellow)),
-                ]))
-                .alignment(Alignment::Right)
-                .position(ratatui::widgets::block::Position::Bottom),
-            );
-        } else {
-            block = block.title(
-                ratatui::widgets::block::Title::from(Line::from(vec![
-                    Span::styled("|", Style::default().fg(Color::Yellow)),
-                    String::from(char::from_u32(0x25b2).unwrap_or('>')).red(),
-                    String::from(char::from_u32(0x25bc).unwrap_or('>')).red(),
-                    Span::styled("select|", Style::default().fg(Color::Yellow)),
-                ]))
-                .alignment(Alignment::Right)
-                .position(ratatui::widgets::block::Position::Bottom),
-            );
-        }
 
         block = block
             .border_style(Style::default().fg(Color::Rgb(100, 100, 100)))

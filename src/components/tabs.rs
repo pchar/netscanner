@@ -37,48 +37,84 @@ impl Tabs {
     }
 
     fn make_tabs(&self) -> Paragraph<'_> {
-        let enum_titles: Vec<Span> =
+        // Build tab names with numbers
+        let tabs: Vec<Span> =
             TabsEnum::iter()
                 .enumerate()
-                .fold(Vec::new(), |mut title_spans, (idx, p)| {
+                .fold(Vec::new(), |mut spans, (idx, p)| {
                     let index_str = idx + 1;
-
-                    let s1 = "(".yellow();
-                    let s2 = format!("{}", index_str).red();
-                    let s3 = ")".yellow();
-                    let mut s4 = format!("{} ", p).dark_gray().bold();
-                    if idx == self.tab_index {
-                        s4 = format!("{} ", p).green().bold();
-                    }
-
-                    title_spans.push(s1);
-                    title_spans.push(s2);
-                    title_spans.push(s3);
-                    title_spans.push(s4);
-                    title_spans
+                    let tab_style = if idx == self.tab_index {
+                        Style::default().green().bold()
+                    } else {
+                        Style::default().dark_gray().bold()
+                    };
+                    spans.extend_from_slice(&[
+                        Span::styled("(", Style::default().fg(Color::Yellow)),
+                        Span::styled(format!("{}", index_str), Style::default().fg(Color::Red)),
+                        Span::styled(")", Style::default().fg(Color::Yellow)),
+                        Span::styled(p.to_string(), tab_style),
+                        Span::raw(" "),
+                    ]);
+                    spans
                 });
 
-        let title = Title::from(Line::from(vec![
-            "|".yellow(),
-            "Tab".red().bold(),
-            "s|".yellow(),
-        ]))
-        .alignment(Alignment::Right);
+        // Build right-side action keys based on current tab
+        let actions: Vec<Span> = match TabsEnum::iter().nth(self.tab_index).unwrap() {
+            TabsEnum::Discovery => vec![
+                Span::raw(" "),
+                Span::styled("|", Style::default().fg(Color::Yellow)),
+                Span::styled("s", Style::default().add_modifier(Modifier::BOLD).fg(Color::Red)),
+                Span::styled("can ", Style::default().fg(Color::Yellow)),
+                Span::styled("stop", Style::default().fg(Color::Yellow)),
+                Span::styled(" ", Style::default().fg(Color::Yellow)),
+                Span::styled("e", Style::default().add_modifier(Modifier::BOLD).fg(Color::Red)),
+                Span::styled("xport", Style::default().fg(Color::Yellow)),
+                Span::styled("|", Style::default().fg(Color::Yellow)),
+            ],
+            TabsEnum::Packets => vec![
+                Span::raw(" "),
+                Span::styled("|", Style::default().fg(Color::Yellow)),
+                Span::styled("d", Style::default().add_modifier(Modifier::BOLD).fg(Color::Red)),
+                Span::styled("ump ", Style::default().fg(Color::Yellow)),
+                Span::styled("s", Style::default().add_modifier(Modifier::BOLD).fg(Color::Red)),
+                Span::styled("top", Style::default().fg(Color::Yellow)),
+                Span::styled("|", Style::default().fg(Color::Yellow)),
+            ],
+            TabsEnum::Traffic => vec![
+                Span::raw(" "),
+                Span::styled("|", Style::default().fg(Color::Yellow)),
+                Span::styled("d", Style::default().add_modifier(Modifier::BOLD).fg(Color::Red)),
+                Span::styled("ump ", Style::default().fg(Color::Yellow)),
+                Span::styled("s", Style::default().add_modifier(Modifier::BOLD).fg(Color::Red)),
+                Span::styled("top", Style::default().fg(Color::Yellow)),
+                Span::styled("|", Style::default().fg(Color::Yellow)),
+            ],
+            TabsEnum::Ports => vec![
+                Span::raw(" "),
+                Span::styled("|", Style::default().fg(Color::Yellow)),
+                Span::styled("s", Style::default().add_modifier(Modifier::BOLD).fg(Color::Red)),
+                Span::styled("can ", Style::default().fg(Color::Yellow)),
+                Span::styled("s", Style::default().add_modifier(Modifier::BOLD).fg(Color::Red)),
+                Span::styled("top", Style::default().fg(Color::Yellow)),
+                Span::styled("|", Style::default().fg(Color::Yellow)),
+            ],
+        };
 
-        let arrrow = String::from(char::from_u32(0x25bc).unwrap_or('>'));
+        // Combine tabs and actions in one line
+        let combined: Vec<Span> = tabs.into_iter().chain(actions).collect();
+
         let b = Block::default()
-            .title(title)
             .title(
-                Title::from(Line::from(vec!["|".yellow(), arrrow.green(), "|".yellow()]))
+                Title::from(Line::from(combined.clone()))
                     .alignment(Alignment::Center)
-                    .position(block::Position::Bottom),
+                    .position(block::Position::Top),
             )
             .borders(Borders::ALL)
             .border_type(DEFAULT_BORDER_STYLE)
-            .padding(Padding::new(1, 0, 0, 0))
+            .padding(Padding::new(0, 0, 0, 0))
             .border_style(Style::default().fg(Color::Rgb(100, 100, 100)));
 
-        Paragraph::new(Line::from(enum_titles)).block(b)
+        Paragraph::new(Line::from(combined)).block(b)
     }
 
     fn next_tab(&mut self) {

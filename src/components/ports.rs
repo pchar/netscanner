@@ -255,33 +255,6 @@ impl Ports {
         List::new(items)
             .block(
                 Block::new()
-                    .title(
-                        ratatui::widgets::block::Title::from(Line::from(vec![
-                            Span::styled("|", Style::default().fg(Color::Yellow)),
-                            Span::styled(
-                                "s",
-                                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
-                            ),
-                            Span::styled("can selected", Style::default().fg(Color::Yellow)),
-                            Span::styled("|", Style::default().fg(Color::Yellow)),
-                        ]))
-                        .alignment(Alignment::Right), // .position(ratatui::widgets::block::Position::Bottom),
-                    )
-                    .title(
-                        ratatui::widgets::block::Title::from("|Ports|".yellow())
-                            .position(ratatui::widgets::block::Position::Top)
-                            .alignment(Alignment::Right),
-                    )
-                    .title(
-                        ratatui::widgets::block::Title::from(Line::from(vec![
-                            Span::styled("|", Style::default().fg(Color::Yellow)),
-                            String::from(char::from_u32(0x25b2).unwrap_or('>')).red(),
-                            String::from(char::from_u32(0x25bc).unwrap_or('>')).red(),
-                            Span::styled("select|", Style::default().fg(Color::Yellow)),
-                        ]))
-                        .position(ratatui::widgets::block::Position::Bottom)
-                        .alignment(Alignment::Right),
-                    )
                     .border_style(Style::default().fg(Color::Rgb(100, 100, 100)))
                     .borders(Borders::ALL)
                     .border_type(DEFAULT_BORDER_STYLE)
