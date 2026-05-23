@@ -339,46 +339,51 @@ impl Discovery {
     }
 
     fn update_mac_from_arp_cache(&mut self, ip: &str) {
-        // On macOS/Linux, read the system ARP cache via `arp -a` command
-        // since ARP responses may not be visible on the wire
-        let output = std::process::Command::new("arp")
-            .arg("-a")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok());
+        // Give the OS a moment to populate the ARP cache, then read it
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
-        if let Some(arp_output) = output {
-            for line in arp_output.lines() {
-                // macOS format: hostname (ip) at mac (type)
-                // Linux format: ip at mac type flags if on ...
-                if line.contains(ip) {
-                    // Extract MAC address (format: xx:xx:xx:xx:xx:xx or xx-xx-xx-xx-xx-xx)
+        for retry in 0..3 {
+            if retry > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+
+            let output = std::process::Command::new("arp")
+                .arg("-a")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok());
+
+            if let Some(arp_output) = output {
+                for line in arp_output.lines() {
+                    if !line.contains(ip) {
+                        continue;
+                    }
+
                     let mac = line
                         .split_whitespace()
                         .find(|part| {
-                            // MAC address format: xx:xx:xx:xx:xx:xx or xx-xx-xx-xx-xx-xx
                             part.len() >= 11
                                 && (part.contains(':') || part.contains('-'))
                                 && part.chars().all(|c| c.is_ascii_hexdigit() || c == ':' || c == '-')
                         })
-                        .map(|m| {
-                            m.replace("-", ":")
-                        });
+                        .map(|m| m.replace("-", ":"));
 
-                    if let Some(mac) = mac.clone() {
+                    if let Some(mac) = &mac {
                         if let Some(entry) = self.scanned_ips.iter_mut().find(|e| e.ip == ip) {
                             entry.mac = mac.clone();
                             if let Some(oui) = &self.oui {
-                                if let Ok(Some(oui_res)) = oui.lookup_by_mac(&mac) {
+                                if let Ok(Some(oui_res)) = oui.lookup_by_mac(mac) {
                                     entry.vendor = oui_res.company_name.clone();
                                 }
                             }
+                            log::debug!("MAC resolved: {} -> {} (vendor: {})", ip, mac, entry.vendor);
+                            return;
                         }
-                        return;
                     }
                 }
             }
         }
+        log::warn!("No MAC found for {} after 3 retries", ip);
     }
 
     fn process_ip(&mut self, ip: &str) {
@@ -386,30 +391,32 @@ impl Discovery {
         let ipv4: Ipv4Addr = ip.parse().unwrap();
         self.send_arp(ipv4);
 
-        // Also check system ARP cache since on macOS ARP responses may not be visible on the wire
-        self.update_mac_from_arp_cache(ip);
+        // Add/update entry in scanned_ips first, then resolve MAC
+        let hostname = {
+            let hip: IpAddr = ip.parse().unwrap();
+            lookup_addr(&hip).unwrap_or_default()
+        };
 
         if let Some(n) = self.scanned_ips.iter_mut().find(|item| item.ip == ip) {
-            let hip: IpAddr = ip.parse().unwrap();
-            let host = lookup_addr(&hip).unwrap_or_default();
-            n.hostname = host;
+            n.hostname = hostname;
             n.ip = ip.to_string();
         } else {
-            let hip: IpAddr = ip.parse().unwrap();
-            let host = lookup_addr(&hip).unwrap_or_default();
             self.scanned_ips.push(ScannedIp {
                 ip: ip.to_string(),
                 mac: String::new(),
-                hostname: host,
+                hostname: hostname.clone(),
                 vendor: String::new(),
             });
-
-            self.scanned_ips.sort_by(|a, b| {
-                let a_ip: Ipv4Addr = a.ip.parse::<Ipv4Addr>().unwrap();
-                let b_ip: Ipv4Addr = b.ip.parse::<Ipv4Addr>().unwrap();
-                a_ip.partial_cmp(&b_ip).unwrap()
-            });
         }
+
+        // Now resolve MAC from ARP cache
+        self.update_mac_from_arp_cache(ip);
+
+        self.scanned_ips.sort_by(|a, b| {
+            let a_ip: Ipv4Addr = a.ip.parse::<Ipv4Addr>().unwrap();
+            let b_ip: Ipv4Addr = b.ip.parse::<Ipv4Addr>().unwrap();
+            a_ip.partial_cmp(&b_ip).unwrap()
+        });
 
         self.set_scrollbar_height();
     }
