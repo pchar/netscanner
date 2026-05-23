@@ -354,7 +354,7 @@ impl PacketDump {
                 tx,
             );
         } else {
-            println!("[{}]: Malformed IPv6 Packet", interface_name);
+            log::warn!("[{}]: Malformed IPv6 Packet", interface_name);
         }
     }
 
