@@ -232,9 +232,11 @@ impl Sniffer {
 
     fn render_summary(&mut self, f: &mut Frame<'_>, area: Rect) {
         if !self.traffic_ips.is_empty() {
+            let (total_dl, total_ul) = crate::utils::count_traffic_total(&self.traffic_ips);
+
             let total_download = Line::from(vec![
                 "Total download: ".into(),
-                bytes_convert(self.traffic_ips[0].download).green(),
+                bytes_convert(total_dl).green(),
             ]);
             f.render_widget(
                 total_download,
@@ -248,7 +250,7 @@ impl Sniffer {
 
             let total_upload = Line::from(vec![
                 "Total upload: ".into(),
-                bytes_convert(self.traffic_ips[0].upload).red(),
+                bytes_convert(total_ul).red(),
             ]);
             f.render_widget(
                 total_upload,
