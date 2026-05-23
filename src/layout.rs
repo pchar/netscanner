@@ -1,7 +1,7 @@
 use ratatui::{prelude::*, widgets::*};
 
-const VERTICAL_TOP_PERCENT: u16 = 40;
-const VERTICAL_BOTTOM_PERCENT: u16 = 60;
+const VERTICAL_TOP_PERCENT: u16 = 30;
+const VERTICAL_BOTTOM_PERCENT: u16 = 70;
 
 const HORIZONTAL_SPLIT: u16 = 50;
 

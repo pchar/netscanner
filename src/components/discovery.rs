@@ -502,22 +502,8 @@ impl Discovery {
                 ratatui::widgets::block::Title::from(Line::from(scan_title))
                     .position(ratatui::widgets::block::Position::Top)
                     .alignment(Alignment::Left),
-            )
-            .title(
-                ratatui::widgets::block::Title::from(Line::from(vec![
-                    Span::styled("|", Style::default().fg(Color::Yellow)),
-                    String::from(char::from_u32(0x25b2).unwrap_or('>')).red(),
-                    String::from(char::from_u32(0x25bc).unwrap_or('>')).red(),
-                    Span::styled("select|", Style::default().fg(Color::Yellow)),
-                ]))
-                .position(ratatui::widgets::block::Position::Bottom)
-                .alignment(Alignment::Right),
-            )
-            .border_style(Style::default().fg(Color::Rgb(100, 100, 100)))
-            .borders(Borders::ALL)
-            .border_type(DEFAULT_BORDER_STYLE);
+            );
 
-        // Show "stop k" command when scanning
         if is_scanning {
             block = block.title(
                 ratatui::widgets::block::Title::from(Line::from(vec![
@@ -526,17 +512,33 @@ impl Discovery {
                         "s",
                         Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
                     ),
-                    Span::styled("top", Style::default().fg(Color::Yellow)),
+                    Span::styled("top ", Style::default().fg(Color::Yellow)),
                     Span::styled(
-                        " k",
-                        Style::default().fg(Color::Yellow),
+                        "k",
+                        Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
                     ),
                     Span::styled("|", Style::default().fg(Color::Yellow)),
                 ]))
                 .alignment(Alignment::Right)
                 .position(ratatui::widgets::block::Position::Bottom),
             );
+        } else {
+            block = block.title(
+                ratatui::widgets::block::Title::from(Line::from(vec![
+                    Span::styled("|", Style::default().fg(Color::Yellow)),
+                    String::from(char::from_u32(0x25b2).unwrap_or('>')).red(),
+                    String::from(char::from_u32(0x25bc).unwrap_or('>')).red(),
+                    Span::styled("select|", Style::default().fg(Color::Yellow)),
+                ]))
+                .alignment(Alignment::Right)
+                .position(ratatui::widgets::block::Position::Bottom),
+            );
         }
+
+        block = block
+            .border_style(Style::default().fg(Color::Rgb(100, 100, 100)))
+            .borders(Borders::ALL)
+            .border_type(DEFAULT_BORDER_STYLE);
 
         let table = Table::new(rows, [
             Constraint::Length(16),
@@ -829,7 +831,7 @@ impl Component for Discovery {
                 table_rect.width - (input_size + 1),
                 table_rect.y + 1,
                 input_size,
-                3,
+                2,
             );
 
             // -- INPUT_SIZE - 3 is offset for border + 1char for cursor
