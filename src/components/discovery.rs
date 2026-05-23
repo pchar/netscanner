@@ -31,7 +31,7 @@ use mac_oui::Oui;
 use tui_input::backend::crossterm::EventHandler;
 use tui_input::Input;
 
-static POOL_SIZE: usize = 32;
+static POOL_SIZE: usize = 8;
 static INPUT_SIZE: usize = 30;
 static DEFAULT_IP: &str = "192.168.1.0/24";
 const SPINNER_SYMBOLS: [&str; 6] = ["⠷", "⠯", "⠟", "⠻", "⠽", "⠾"];
@@ -40,24 +40,31 @@ const SPINNER_SYMBOLS: [&str; 6] = ["⠷", "⠯", "⠟", "⠻", "⠽", "⠾"];
 // Shell-based helpers — no root/sudo required.
 // ---------------------------------------------------------------------------
 
-/// Ping a host once using the system `ping`. Returns true if it responds.
-fn ping_host(ip: &str) -> bool {
-    #[cfg(target_os = "macos")]
-    let args: &[&str] = &["-c", "1", "-t", "1", ip];
-    #[cfg(not(target_os = "macos"))]
-    let args: &[&str] = &["-c", "1", "-W", "1", ip];
-
-    std::process::Command::new("ping")
-        .args(args)
-        // Isolate all stdio so child processes never share the terminal.
-        // Without this the kernel may route keystrokes to a subprocess
-        // instead of crossterm, making the UI appear frozen.
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+/// Probe a host by attempting TCP connects to common ports via `nc`.
+/// Returns true if the host responds (port open) or sends RST (port closed).
+/// A silent timeout means the host is likely down or heavily firewalled.
+fn check_host(ip: &str) -> bool {
+    for port in ["80", "443", "22"] {
+        let Ok(output) = std::process::Command::new("nc")
+            .args(["-z", "-w", "1", ip, port])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+        else {
+            continue;
+        };
+        if output.status.success() {
+            return true;
+        }
+        if String::from_utf8_lossy(&output.stderr)
+            .to_lowercase()
+            .contains("refused")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Reverse-DNS via `dig`, falling back to `nslookup`.
@@ -117,16 +124,16 @@ fn get_mac(ip: &str) -> String {
 // Thread-pool scanner with coordinator
 //
 // Layout:
-//   start() divides the IP list evenly across `pool_size` worker threads.
-//   Each worker pings its slice sequentially and reports via the action
-//   channel. A coordinator thread blocks until every worker exits (by waiting
-//   for all done_tx clones to drop), then sends ScanComplete.
-//
-//   CountIp is sent immediately after each ping so the progress counter
-//   updates in real time, independent of how long DNS/MAC lookup takes.
+//   start() divides the IP list evenly across `pool_size` scan workers.
+//   Each worker probes its slice with nc (no root required) and reports live
+//   hosts via PingIpResponded + CountIp.  Live IPs are also forwarded to a
+//   single dedicated hostname/MAC thread via a channel, keeping DNS subprocess
+//   count at 1-at-a-time and preventing UI freeze from process overload.
+//   A coordinator thread waits for all workers to exit (done_tx channel
+//   exhaustion) and sends ScanComplete.
 //
 // stop() sets a flag; workers check it between IPs and exit within at most
-// one ping-timeout (1 second).
+// one nc-timeout (1 second × number of ports probed).
 // ---------------------------------------------------------------------------
 
 struct Scanner {
@@ -157,8 +164,9 @@ impl Scanner {
             return;
         }
 
-        // Each worker clones done_tx. When the last clone drops, done_rx
-        // unblocks and the coordinator knows all workers have exited.
+        // Channel: scan workers forward live IPs to the single resolver thread.
+        let (hn_tx, hn_rx) = std::sync::mpsc::channel::<String>();
+        // Channel: scan workers signal completion to the coordinator.
         let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
 
         // Divide IPs evenly across workers — no shared queue, no Mutex.
@@ -171,40 +179,42 @@ impl Scanner {
             let tx = action_tx.clone();
             let stop = stop_flag.clone();
             let done_tx = done_tx.clone();
+            let hn_tx = hn_tx.clone();
 
             std::thread::spawn(move || {
                 for ip in slice {
                     if stop.load(Ordering::Relaxed) {
                         break;
                     }
-
-                    if ping_host(&ip) {
-                        // Show host immediately; details arrive via IpResolved.
+                    if check_host(&ip) {
                         tx.send(Action::PingIpResponded(ip.clone())).ok();
-                        // Count right after ping — progress updates independently
-                        // of how long DNS/MAC lookup takes.
-                        tx.send(Action::CountIp).ok();
-
-                        if !stop.load(Ordering::Relaxed) {
-                            let hostname = resolve_hostname(&ip);
-                            // Brief pause so the OS ARP cache fills after ping.
-                            std::thread::sleep(Duration::from_millis(150));
-                            let mac = get_mac(&ip);
-                            tx.send(Action::IpResolved { ip, hostname, mac }).ok();
-                        }
-                    } else {
-                        tx.send(Action::CountIp).ok();
+                        hn_tx.send(ip).ok();
                     }
+                    tx.send(Action::CountIp).ok();
                 }
-                drop(done_tx); // signals this worker is done
+                drop(hn_tx); // worker done producing IPs
+                drop(done_tx); // worker done entirely
             });
         }
-        drop(done_tx); // drop original; workers hold all live copies
+        drop(hn_tx); // drop originals so channels close when all workers finish
+        drop(done_tx);
 
-        // Coordinator: block until every worker exits, then notify the UI.
+        // Single resolver thread: serialises all DNS + ARP lookups so we
+        // never have more than one dig/nslookup/arp subprocess at a time.
+        let tx_hn = action_tx.clone();
+        std::thread::spawn(move || {
+            for ip in hn_rx {
+                // Let the ARP cache settle after the nc probe.
+                std::thread::sleep(Duration::from_millis(50));
+                let hostname = resolve_hostname(&ip);
+                let mac = get_mac(&ip);
+                tx_hn.send(Action::IpResolved { ip, hostname, mac }).ok();
+            }
+        });
+
+        // Coordinator: wait for all scan workers, then tell the UI.
         let tx = action_tx;
         let coordinator = std::thread::spawn(move || {
-            // recv() returns Err only when ALL done_tx clones are dropped.
             let _ = done_rx.recv();
             tx.send(Action::ScanComplete).ok();
         });
