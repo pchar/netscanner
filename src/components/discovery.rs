@@ -597,14 +597,14 @@ impl Discovery {
 
         block = block.title(
             ratatui::widgets::block::Title::from(Line::from(vec![
-                Span::styled("|", Style::default().fg(Color::Yellow)),
+                Span::styled(" ", Style::default()),
                 Span::styled(
                     "o",
                     Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
                 ),
                 Span::styled("rder ", Style::default().fg(Color::Yellow)),
-                Span::styled(sort_col_label, Style::default().fg(Color::Yellow)),
-                Span::styled("|", Style::default().fg(Color::Yellow)),
+                Span::styled(sort_col_label, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(" ", Style::default()),
             ]))
             .position(ratatui::widgets::block::Position::Bottom)
             .alignment(Alignment::Right),
@@ -703,40 +703,35 @@ impl Discovery {
 
         let popup_rect = Rect::new(x as u16, y as u16, popup_width as u16, popup_height as u16);
 
-        // Create the popup block
+        // Create the popup block with focus indicator
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title(" Sort by: ".blue())
-            .title_bottom(" q/ESC to close ".dark_gray());
+            .border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .title(" Sort by: ".blue().bold())
+            .title_bottom(" Esc to close ".dark_gray());
 
         f.render_widget(block, popup_rect);
 
-        // Create list of sort options
+        // Create list of sort options with F-key bindings
         let options = vec![
-            ("1", "IP"),
-            ("2", "MAC"),
-            ("3", "Hostname"),
-            ("4", "Vendor"),
+            ("F1", "IP"),
+            ("F2", "MAC"),
+            ("F3", "Hostname"),
+            ("F4", "Vendor"),
         ];
 
         let items: Vec<ListItem> = options
             .iter()
             .map(|(key, label)| {
                 let current = match self.sort_column {
-                    crate::action::SortColumn::Ip => "1",
-                    crate::action::SortColumn::Mac => "2",
-                    crate::action::SortColumn::Hostname => "3",
-                    crate::action::SortColumn::Vendor => "4",
+                    crate::action::SortColumn::Ip => "F1",
+                    crate::action::SortColumn::Mac => "F2",
+                    crate::action::SortColumn::Hostname => "F3",
+                    crate::action::SortColumn::Vendor => "F4",
                 };
                 let selected = key == &current;
                 if selected {
-                    ListItem::from(
-                        format!("> {} {}", key, label)
-                            .cyan()
-                            .bold()
-                            .to_string(),
-                    )
+                    ListItem::from(format!("> {} {}", key, label).cyan().bold().to_string())
                 } else {
                     ListItem::from(format!("  {} {}", key, label).dark_gray().to_string())
                 }
@@ -795,35 +790,35 @@ impl Component for Discovery {
             // Handle sort menu when open
             if self.showing_sort_menu {
                 match key.code {
-                    KeyCode::Char('1') => {
+                    KeyCode::F(1) => {
                         if let Some(tx) = &self.action_tx {
                             tx.send(Action::SortBy(crate::action::SortColumn::Ip)).ok();
                         }
                         self.showing_sort_menu = false;
                         return Ok(None);
                     }
-                    KeyCode::Char('2') => {
+                    KeyCode::F(2) => {
                         if let Some(tx) = &self.action_tx {
                             tx.send(Action::SortBy(crate::action::SortColumn::Mac)).ok();
                         }
                         self.showing_sort_menu = false;
                         return Ok(None);
                     }
-                    KeyCode::Char('3') => {
+                    KeyCode::F(3) => {
                         if let Some(tx) = &self.action_tx {
                             tx.send(Action::SortBy(crate::action::SortColumn::Hostname)).ok();
                         }
                         self.showing_sort_menu = false;
                         return Ok(None);
                     }
-                    KeyCode::Char('4') => {
+                    KeyCode::F(4) => {
                         if let Some(tx) = &self.action_tx {
                             tx.send(Action::SortBy(crate::action::SortColumn::Vendor)).ok();
                         }
                         self.showing_sort_menu = false;
                         return Ok(None);
                     }
-                    KeyCode::Esc | KeyCode::Char('q') => {
+                    KeyCode::Esc => {
                         self.showing_sort_menu = false;
                         return Ok(None);
                     }
