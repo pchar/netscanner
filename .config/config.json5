@@ -17,6 +17,14 @@
       "<left>": "Left",
       "<right>": "Right",
       "<Tab>": "Tab",
+      // Vim-style navigation
+      "<h>": "Left",
+      "<j>": "Down",
+      "<k>": "Up",
+      "<l>": "Right",
+      // Alternative quit keys (macOS-friendly; Ctrl-c/d/z are consumed by the OS)
+      "<Alt-q>": "Quit",
+      "<F10>": "Quit",
       "<1>": "JumpDiscovery",
       "<2>": "JumpPackets",
       "<3>": "JumpPorts",

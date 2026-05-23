@@ -3,6 +3,8 @@ use color_eyre::eyre::Result;
 use color_eyre::owo_colors::OwoColorize;
 use dns_lookup::{lookup_addr, lookup_host};
 use futures::future::join_all;
+use futures::stream;
+use futures::StreamExt;
 
 use pnet::datalink::{Channel, NetworkInterface};
 use pnet::packet::{
@@ -244,46 +246,67 @@ impl Discovery {
             self.is_scanning = true;
 
             let tx = self.action_tx.clone().unwrap();
-            let semaphore = Arc::new(Semaphore::new(POOL_SIZE));
+            let cidr_clone = self.cidr;
 
+            // Run the scan in a separate OS thread with its own Tokio runtime.
+            // This avoids two problems:
+            // 1. surge_ping's raw ICMP sockets (sendto/recvfrom) are blocking syscalls
+            //    that would freeze the main event loop if run on a worker thread.
+            // 2. Creating a runtime inside tokio::spawn_blocking still nests inside
+            //    the outer runtime (same error as below), so we use std::thread::spawn
+            //    for a truly independent thread.
             self.task = tokio::spawn(async move {
-                let ips = get_ips4_from_cidr(cidr);
-                let tasks: Vec<_> = ips
-                    .iter()
-                    .map(|&ip| {
-                        let s = semaphore.clone();
-                        let tx = tx.clone();
-                        let c = || async move {
-                            let _permit = s.acquire().await.unwrap();
-                            let client =
-                                Client::new(&Config::default()).expect("Cannot create client");
-                            let payload = [0; 56];
-                            let mut pinger = client
-                                .pinger(IpAddr::V4(ip), PingIdentifier(random()))
-                                .await;
-                            pinger.timeout(Duration::from_secs(2));
+                if let Some(cidr) = cidr_clone {
+                    let ips = get_ips4_from_cidr(cidr);
+                    let ips_vec: Vec<Ipv4Addr> = ips.to_vec();
 
-                            match pinger.ping(PingSequence(2), &payload).await {
-                                Ok((IcmpPacket::V4(packet), dur)) => {
-                                    tx.send(Action::PingIp(packet.get_real_dest().to_string()))
-                                        .unwrap_or_default();
-                                    tx.send(Action::CountIp).unwrap_or_default();
-                                }
-                                Ok(_) => {
-                                    tx.send(Action::CountIp).unwrap_or_default();
-                                }
-                                Err(_) => {
-                                    tx.send(Action::CountIp).unwrap_or_default();
-                                }
-                            }
-                        };
-                        tokio::spawn(c())
-                    })
-                    .collect();
-                for t in tasks {
-                    let _ = t.await;
+                    // Use std::thread::spawn (not spawn_blocking) for a truly
+                    // independent thread with no connection to the outer runtime.
+                    let tx_thread = tx.clone();
+                    std::thread::spawn(move || {
+                        // Build a new single-threaded runtime on this independent thread.
+                        // This runtime is completely separate from the main event loop.
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("Failed to build mini runtime");
+
+                        rt.block_on(async {
+                            let semaphore = Arc::new(Semaphore::new(POOL_SIZE));
+
+                            stream::iter(ips_vec)
+                                .for_each_concurrent(POOL_SIZE, |ip| {
+                                    let tx = tx_thread.clone();
+                                    let s = semaphore.clone();
+                                    async move {
+                                        let _permit = s.acquire().await.unwrap();
+                                        let client =
+                                            Client::new(&Config::default()).expect("Cannot create client");
+                                        let payload = [0; 56];
+                                        let mut pinger = client
+                                            .pinger(IpAddr::V4(ip), PingIdentifier(random()))
+                                            .await;
+                                        pinger.timeout(Duration::from_secs(2));
+
+                                        match pinger.ping(PingSequence(2), &payload).await {
+                                            Ok((IcmpPacket::V4(packet), _)) => {
+                                                tx.send(Action::PingIp(packet.get_real_dest().to_string()))
+                                                    .unwrap_or_default();
+                                                tx.send(Action::CountIp).unwrap_or_default();
+                                            }
+                                            Ok(_) => {
+                                                tx.send(Action::CountIp).unwrap_or_default();
+                                            }
+                                            Err(_) => {
+                                                tx.send(Action::CountIp).unwrap_or_default();
+                                            }
+                                        }
+                                    }
+                                })
+                                .await;
+                        });
+                    });
                 }
-                // let _ = join_all(tasks).await;
             });
         };
     }
@@ -337,13 +360,22 @@ impl Discovery {
     }
 
     fn set_active_subnet(&mut self, intf: &NetworkInterface) {
-        let a_ip = intf.ips[0].ip().to_string();
-        let ip: Vec<&str> = a_ip.split('.').collect();
-        if ip.len() > 1 {
-            let new_a_ip = format!("{}.{}.{}.0/24", ip[0], ip[1], ip[2]);
-            self.input = Input::default().with_value(new_a_ip);
-
-            self.set_cidr(self.input.value().to_string(), false);
+        let ipv4 = intf.ips.iter().find_map(|ip| {
+            if let IpAddr::V4(v4) = ip.ip() {
+                if v4.is_private() && !v4.is_loopback() && !v4.is_unspecified() {
+                    return Some(v4);
+                }
+            }
+            None
+        });
+        if let Some(ip) = ipv4 {
+            let ip_str = ip.to_string();
+            let parts: Vec<&str> = ip_str.split('.').collect();
+            if parts.len() > 1 {
+                let new_a_ip = format!("{}.{}.{}.0/24", parts[0], parts[1], parts[2]);
+                self.input = Input::default().with_value(new_a_ip);
+                self.set_cidr(self.input.value().to_string(), false);
+            }
         }
     }
 
@@ -398,7 +430,7 @@ impl Discovery {
         cidr: Option<Ipv4Cidr>,
         ip_num: i32,
         is_scanning: bool,
-    ) -> Table {
+    ) -> Table<'_> {
         let header = Row::new(vec!["ip", "mac", "hostname", "vendor"])
             .style(Style::default().fg(Color::Yellow))
             .top_margin(1)
@@ -501,7 +533,7 @@ impl Discovery {
         scrollbar
     }
 
-    fn make_input(&self, scroll: usize) -> Paragraph {
+    fn make_input(&self, scroll: usize) -> Paragraph<'_> {
         let input = Paragraph::new(self.input.value())
             .style(Style::default().fg(Color::Green))
             .scroll((0, scroll as u16))
@@ -548,7 +580,7 @@ impl Discovery {
         input
     }
 
-    fn make_error(&mut self) -> Paragraph {
+    fn make_error(&mut self) -> Paragraph<'_> {
         let error = Paragraph::new("CIDR parse error")
             .style(Style::default().fg(Color::Red))
             .block(
@@ -560,7 +592,7 @@ impl Discovery {
         error
     }
 
-    fn make_spinner(&self) -> Span {
+    fn make_spinner(&self) -> Span<'_> {
         let spinner = SPINNER_SYMBOLS[self.spinner_index];
         Span::styled(
             format!("{spinner}scanning.."),
@@ -618,7 +650,7 @@ impl Component for Discovery {
         if self.is_scanning {
             if let Action::Tick = action {
                 let mut s_index = self.spinner_index + 1;
-                s_index %= SPINNER_SYMBOLS.len() - 1;
+                s_index %= SPINNER_SYMBOLS.len();
                 self.spinner_index = s_index;
             }
         }

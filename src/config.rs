@@ -64,16 +64,19 @@ impl Config {
 
     let mut cfg: Self = builder.build()?.try_deserialize()?;
 
+    // Merge defaults: defaults fill in keys the user hasn't explicitly set.
     for (mode, default_bindings) in default_config.keybindings.iter() {
       let user_bindings = cfg.keybindings.entry(*mode).or_default();
       for (key, cmd) in default_bindings.iter() {
-        user_bindings.entry(key.clone()).or_insert_with(|| cmd.clone());
+        // user_bindings already has user config values (loaded via builder first),
+        // so entry().or_insert() keeps user values and only fills missing keys
+        user_bindings.entry(key.clone()).or_insert(cmd.clone());
       }
     }
     for (mode, default_styles) in default_config.styles.iter() {
       let user_styles = cfg.styles.entry(*mode).or_default();
       for (style_key, style) in default_styles.iter() {
-        user_styles.entry(style_key.clone()).or_insert_with(|| style.clone());
+        user_styles.entry(style_key.clone()).or_insert(style.clone());
       }
     }
 

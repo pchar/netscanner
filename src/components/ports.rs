@@ -15,7 +15,6 @@ use std::{string, time::Duration};
 use tokio::{
     net::TcpStream,
     sync::mpsc::{self, UnboundedSender},
-    task::{self, JoinHandle},
 };
 
 use super::Component;
@@ -167,7 +166,7 @@ impl Ports {
         let ip: IpAddr = self.ip_ports[index].ip.parse().unwrap();
         let ports_box = Box::new(COMMON_PORTS.iter());
 
-        let h = tokio::spawn(async move {
+        tokio::spawn(async move {
             let ports = stream::iter(ports_box);
             ports
                 .for_each_concurrent(POOL_SIZE, |port| {
@@ -199,7 +198,7 @@ impl Ports {
         }
     }
 
-    fn make_list(&self, rect: Rect) -> List {
+    fn make_list(&self, rect: Rect) -> List<'_> {
         let mut items = Vec::new();
         for ip in &self.ip_ports {
             let mut lines = Vec::new();
@@ -320,7 +319,7 @@ impl Component for Ports {
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         if let Action::Tick = action {
             let mut s_index = self.spinner_index + 1;
-            s_index %= SPINNER_SYMBOLS.len() - 1;
+            s_index %= SPINNER_SYMBOLS.len();
             self.spinner_index = s_index;
         }
 
