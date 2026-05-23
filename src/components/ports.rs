@@ -176,8 +176,8 @@ impl Ports {
         });
     }
 
-    async fn scan(tx: UnboundedSender<Action>, index: usize, ip: IpAddr, port: u16, timeout: u64) {
-        let timeout = Duration::from_secs(2);
+    async fn scan(tx: UnboundedSender<Action>, index: usize, ip: IpAddr, port: u16, timeout_secs: u64) {
+        let timeout = Duration::from_secs(timeout_secs);
         let soc_addr = SocketAddr::new(ip, port);
         if let Ok(Ok(_)) = tokio::time::timeout(timeout, TcpStream::connect(&soc_addr)).await {
             tx.send(Action::PortScan(index, port)).unwrap();
