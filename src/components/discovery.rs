@@ -356,7 +356,8 @@ impl Discovery {
                     let mac = line
                         .split_whitespace()
                         .find(|part| {
-                            part.len() >= 12
+                            // MAC address format: xx:xx:xx:xx:xx:xx or xx-xx-xx-xx-xx-xx
+                            part.len() >= 11
                                 && (part.contains(':') || part.contains('-'))
                                 && part.chars().all(|c| c.is_ascii_hexdigit() || c == ':' || c == '-')
                         })
