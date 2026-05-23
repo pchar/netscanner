@@ -1139,9 +1139,13 @@ impl Component for PacketDump {
             // -- dumping toggle
             if let Action::DumpToggle = action {
                 if self.dump_paused.load(Ordering::Relaxed) {
+                    // Unpause: clear stop flag, start fresh thread
+                    self.dump_stop.store(false, Ordering::SeqCst);
                     self.dump_paused.store(false, Ordering::Relaxed);
                     self.start_loop();
                 } else {
+                    // Pause: signal the running thread to exit, drop the handle
+                    self.dump_stop.store(true, Ordering::SeqCst);
                     self.dump_paused.store(true, Ordering::Relaxed);
                     self.loop_thread = None;
                 }
