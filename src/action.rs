@@ -56,6 +56,7 @@ pub enum Action {
     Clear,
     Export,
     ExportData(ExportData),
+    StopScan,
 }
 
 impl<'de> Deserialize<'de> for Action {

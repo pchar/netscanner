@@ -479,55 +479,73 @@ impl Discovery {
             scan_title.push(")".yellow());
         }
 
-        let table = Table::new(
-            rows,
-            [
-                Constraint::Length(16),
-                Constraint::Length(19),
-                Constraint::Fill(1),
-                Constraint::Fill(1),
-            ],
-        )
-        .header(header)
-        .block(
-            Block::new()
-                .title(
-                    ratatui::widgets::block::Title::from("|Discovery|".yellow())
-                        .position(ratatui::widgets::block::Position::Top)
-                        .alignment(Alignment::Right),
-                )
-                .title(
-                    ratatui::widgets::block::Title::from(Line::from(vec![
-                        Span::styled("|", Style::default().fg(Color::Yellow)),
-                        Span::styled(
-                            "e",
-                            Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
-                        ),
-                        Span::styled("xport data", Style::default().fg(Color::Yellow)),
-                        Span::styled("|", Style::default().fg(Color::Yellow)),
-                    ]))
-                    .alignment(Alignment::Left)
-                    .position(ratatui::widgets::block::Position::Bottom),
-                )
-                .title(
-                    ratatui::widgets::block::Title::from(Line::from(scan_title))
-                        .position(ratatui::widgets::block::Position::Top)
-                        .alignment(Alignment::Left),
-                )
-                .title(
-                    ratatui::widgets::block::Title::from(Line::from(vec![
-                        Span::styled("|", Style::default().fg(Color::Yellow)),
-                        String::from(char::from_u32(0x25b2).unwrap_or('>')).red(),
-                        String::from(char::from_u32(0x25bc).unwrap_or('>')).red(),
-                        Span::styled("select|", Style::default().fg(Color::Yellow)),
-                    ]))
-                    .position(ratatui::widgets::block::Position::Bottom)
+        let mut block = Block::new()
+            .title(
+                ratatui::widgets::block::Title::from("|Discovery|".yellow())
+                    .position(ratatui::widgets::block::Position::Top)
                     .alignment(Alignment::Right),
-                )
-                .border_style(Style::default().fg(Color::Rgb(100, 100, 100)))
-                .borders(Borders::ALL)
-                .border_type(DEFAULT_BORDER_STYLE),
-        )
+            )
+            .title(
+                ratatui::widgets::block::Title::from(Line::from(vec![
+                    Span::styled("|", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        "e",
+                        Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+                    ),
+                    Span::styled("xport data", Style::default().fg(Color::Yellow)),
+                    Span::styled("|", Style::default().fg(Color::Yellow)),
+                ]))
+                .alignment(Alignment::Left)
+                .position(ratatui::widgets::block::Position::Bottom),
+            )
+            .title(
+                ratatui::widgets::block::Title::from(Line::from(scan_title))
+                    .position(ratatui::widgets::block::Position::Top)
+                    .alignment(Alignment::Left),
+            )
+            .title(
+                ratatui::widgets::block::Title::from(Line::from(vec![
+                    Span::styled("|", Style::default().fg(Color::Yellow)),
+                    String::from(char::from_u32(0x25b2).unwrap_or('>')).red(),
+                    String::from(char::from_u32(0x25bc).unwrap_or('>')).red(),
+                    Span::styled("select|", Style::default().fg(Color::Yellow)),
+                ]))
+                .position(ratatui::widgets::block::Position::Bottom)
+                .alignment(Alignment::Right),
+            )
+            .border_style(Style::default().fg(Color::Rgb(100, 100, 100)))
+            .borders(Borders::ALL)
+            .border_type(DEFAULT_BORDER_STYLE);
+
+        // Show "stop k" command when scanning
+        if is_scanning {
+            block = block.title(
+                ratatui::widgets::block::Title::from(Line::from(vec![
+                    Span::styled("|", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        "s",
+                        Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+                    ),
+                    Span::styled("top", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        " k",
+                        Style::default().fg(Color::Yellow),
+                    ),
+                    Span::styled("|", Style::default().fg(Color::Yellow)),
+                ]))
+                .alignment(Alignment::Right)
+                .position(ratatui::widgets::block::Position::Bottom),
+            );
+        }
+
+        let table = Table::new(rows, [
+            Constraint::Length(16),
+            Constraint::Length(19),
+            Constraint::Fill(1),
+            Constraint::Fill(1),
+        ])
+        .header(header)
+        .block(block)
         .highlight_symbol(String::from(char::from_u32(0x25b6).unwrap_or('>')).red())
         .column_spacing(1);
         table
@@ -634,6 +652,16 @@ impl Component for Discovery {
 
     fn handle_key_events(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if self.active_tab == TabsEnum::Discovery {
+            // Override `k` navigation with StopScan when actively scanning
+            if self.is_scanning && self.mode == Mode::Normal {
+                if key.code == KeyCode::Char('k') {
+                    if let Some(tx) = &self.action_tx {
+                        tx.send(Action::StopScan).ok();
+                    }
+                    return Ok(None);
+                }
+            }
+
             let action = match self.mode {
                 Mode::Normal => return Ok(None),
                 Mode::Input => match key.code {
@@ -697,6 +725,12 @@ impl Component for Discovery {
             {
                 self.scan();
             }
+        }
+
+        // -- Stop Scan
+        if let Action::StopScan = action {
+            self.is_scanning = false;
+            log::info!("Scan stopped by user");
         }
         // -- active interface
         if let Action::ActiveInterface(ref interface) = action {
