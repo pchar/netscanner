@@ -349,8 +349,8 @@ impl Component for Ports {
             self.ip_ports[index].state = PortsScanState::Done;
         }
 
-        // -- PING IP
-        if let Action::PingIp(ref ip) = action {
+        // -- PING IP RESPONDED - only track IPs that actually replied to ping
+        if let Action::PingIpResponded(ref ip) = action {
             self.process_ip(ip);
         }
 

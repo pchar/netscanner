@@ -297,7 +297,8 @@ impl Discovery {
 
                                     match pinger.ping(PingSequence(2), &payload).await {
                                         Ok((IcmpPacket::V4(packet), _)) => {
-                                            tx.send(Action::PingIp(packet.get_real_dest().to_string()))
+                                            // Only send PingIpResponded for IPs that actually reply
+                                            tx.send(Action::PingIpResponded(packet.get_real_dest().to_string()))
                                                 .unwrap_or_default();
                                             tx.send(Action::CountIp).unwrap_or_default();
                                         }
@@ -306,6 +307,7 @@ impl Discovery {
                                             tx.send(Action::CountIp).unwrap_or_default();
                                         }
                                         Err(_) => {
+                                            // Failed ping - don't send PingIpResponded
                                             tx.send(Action::CountIp).unwrap_or_default();
                                         }
                                     }

@@ -43,6 +43,7 @@ pub enum Action {
     AppModeChange(Mode),
     ModeChange(Mode),
     PingIp(String),
+    PingIpResponded(String),
     CountIp,
     CidrError,
     PacketDump(DateTime<Local>, PacketsInfoTypesEnum, PacketTypeEnum),
