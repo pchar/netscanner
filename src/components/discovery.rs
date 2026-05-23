@@ -665,7 +665,7 @@ impl Component for Discovery {
         }
 
         // -- custom actions
-        if let Action::PingIp(ref ip) = action {
+        if let Action::PingIpResponded(ref ip) = action {
             self.process_ip(ip);
         }
         // -- count IPs
