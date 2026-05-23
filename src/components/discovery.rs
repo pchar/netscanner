@@ -1,31 +1,29 @@
 use cidr::Ipv4Cidr;
 use color_eyre::eyre::Result;
 use color_eyre::owo_colors::OwoColorize;
-use dns_lookup::{lookup_addr, lookup_host};
+use dns_lookup::lookup_addr;
 use futures::future::join_all;
 use futures::stream;
 use futures::StreamExt;
 
 use pnet::datalink::{Channel, NetworkInterface};
 use pnet::packet::{
-    arp::{ArpHardwareTypes, ArpOperations, ArpPacket, MutableArpPacket},
+    arp::{ArpHardwareTypes, ArpOperations, MutableArpPacket},
     ethernet::{EtherTypes, MutableEthernetPacket},
     MutablePacket, Packet,
 };
 use pnet::util::MacAddr;
-use tokio::sync::Semaphore;
 
 use core::str;
 use ratatui::layout::Position;
 use ratatui::{prelude::*, widgets::*};
 use std::net::{IpAddr, Ipv4Addr};
-use std::string;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use surge_ping::{Client, Config, IcmpPacket, PingIdentifier, PingSequence, ICMP};
 use tokio::{
-    sync::mpsc::{self, UnboundedSender},
-    task::{self, JoinHandle},
+    sync::mpsc::UnboundedSender,
+    task::JoinHandle,
 };
 
 use super::Component;
@@ -50,6 +48,67 @@ static POOL_SIZE: usize = 32;
 static INPUT_SIZE: usize = 30;
 static DEFAULT_IP: &str = "192.168.1.0/24";
 const SPINNER_SYMBOLS: [&str; 6] = ["⠷", "⠯", "⠟", "⠻", "⠽", "⠾"];
+
+// Standalone ARP sender — safe to call from spawn_blocking.
+fn send_arp_to(interface: &NetworkInterface, target_ip: Ipv4Addr) {
+    let mac = match interface.mac {
+        Some(m) => m,
+        None => return,
+    };
+    let ipv4 = match interface.ips.iter().find(|ip| ip.is_ipv4()) {
+        Some(ip) => match ip.ip() {
+            IpAddr::V4(v4) => v4,
+            _ => return,
+        },
+        None => return,
+    };
+    let (mut sender, _) = match pnet::datalink::channel(interface, Default::default()) {
+        Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
+        _ => return,
+    };
+    let mut eth_buf = [0u8; 42];
+    let mut eth_pkt = MutableEthernetPacket::new(&mut eth_buf).unwrap();
+    eth_pkt.set_destination(MacAddr::broadcast());
+    eth_pkt.set_source(mac);
+    eth_pkt.set_ethertype(EtherTypes::Arp);
+
+    let mut arp_buf = [0u8; 28];
+    let mut arp_pkt = MutableArpPacket::new(&mut arp_buf).unwrap();
+    arp_pkt.set_hardware_type(ArpHardwareTypes::Ethernet);
+    arp_pkt.set_protocol_type(EtherTypes::Ipv4);
+    arp_pkt.set_hw_addr_len(6);
+    arp_pkt.set_proto_addr_len(4);
+    arp_pkt.set_operation(ArpOperations::Request);
+    arp_pkt.set_sender_hw_addr(mac);
+    arp_pkt.set_sender_proto_addr(ipv4);
+    arp_pkt.set_target_hw_addr(MacAddr::zero());
+    arp_pkt.set_target_proto_addr(target_ip);
+    eth_pkt.set_payload(arp_pkt.packet_mut());
+    let _ = sender.send_to(eth_pkt.packet(), None);
+}
+
+// Reads the OS ARP cache without sleeping — caller should sleep first.
+fn lookup_mac_from_arp(ip: &str) -> Option<String> {
+    let output = std::process::Command::new("arp")
+        .arg("-a")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())?;
+    for line in output.lines() {
+        if !line.contains(ip) {
+            continue;
+        }
+        let mac = line.split_whitespace().find(|p| {
+            p.len() >= 11
+                && (p.contains(':') || p.contains('-'))
+                && p.chars().all(|c| c.is_ascii_hexdigit() || c == ':' || c == '-')
+        });
+        if let Some(m) = mac {
+            return Some(m.replace('-', ":"));
+        }
+    }
+    None
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScannedIp {
@@ -165,68 +224,6 @@ impl Discovery {
         self.ip_num = 0;
     }
 
-    fn send_arp(&mut self, target_ip: Ipv4Addr) {
-        if let Some(active_interface) = &self.active_interface {
-            if let Some(active_interface_mac) = active_interface.mac {
-                let ipv4 = active_interface.ips.iter().find(|f| f.is_ipv4()).unwrap();
-                let source_ip: Ipv4Addr = ipv4.ip().to_string().parse().unwrap();
-
-                let (mut sender, _) =
-                    match pnet::datalink::channel(active_interface, Default::default()) {
-                        Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
-                        Ok(_) => {
-                            if let Some(tx_action) = &self.action_tx {
-                                tx_action
-                                    .clone()
-                                    .send(Action::Error(
-                                        "Unknown or unsupported channel type".into(),
-                                    ))
-                                    .unwrap();
-                            }
-                            return;
-                        }
-                        Err(e) => {
-                            if let Some(tx_action) = &self.action_tx {
-                                tx_action
-                                    .clone()
-                                    .send(Action::Error(format!(
-                                        "Unable to create datalink channel: {e}"
-                                    )))
-                                    .unwrap();
-                            }
-                            return;
-                        }
-                    };
-
-                let mut ethernet_buffer = [0u8; 42];
-                let mut ethernet_packet = MutableEthernetPacket::new(&mut ethernet_buffer).unwrap();
-
-                ethernet_packet.set_destination(MacAddr::broadcast());
-                ethernet_packet.set_source(active_interface_mac);
-                ethernet_packet.set_ethertype(EtherTypes::Arp);
-
-                let mut arp_buffer = [0u8; 28];
-                let mut arp_packet = MutableArpPacket::new(&mut arp_buffer).unwrap();
-
-                arp_packet.set_hardware_type(ArpHardwareTypes::Ethernet);
-                arp_packet.set_protocol_type(EtherTypes::Ipv4);
-                arp_packet.set_hw_addr_len(6);
-                arp_packet.set_proto_addr_len(4);
-                arp_packet.set_operation(ArpOperations::Request);
-                arp_packet.set_sender_hw_addr(active_interface_mac);
-                arp_packet.set_sender_proto_addr(source_ip);
-                arp_packet.set_target_hw_addr(MacAddr::zero());
-                arp_packet.set_target_proto_addr(target_ip);
-
-                ethernet_packet.set_payload(arp_packet.packet_mut());
-
-                sender
-                    .send_to(ethernet_packet.packet(), None)
-                    .unwrap()
-                    .unwrap();
-            }
-        }
-    }
 
     // fn scan(&mut self) {
     //     self.reset_scan();
@@ -374,82 +371,56 @@ impl Discovery {
         }
     }
 
-    fn update_mac_from_arp_cache(&mut self, ip: &str) {
-        // Give the OS a moment to populate the ARP cache, then read it
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
-        for retry in 0..3 {
-            if retry > 0 {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-
-            let output = std::process::Command::new("arp")
-                .arg("-a")
-                .output()
-                .ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok());
-
-            if let Some(arp_output) = output {
-                for line in arp_output.lines() {
-                    if !line.contains(ip) {
-                        continue;
-                    }
-
-                    let mac = line
-                        .split_whitespace()
-                        .find(|part| {
-                            part.len() >= 11
-                                && (part.contains(':') || part.contains('-'))
-                                && part.chars().all(|c| c.is_ascii_hexdigit() || c == ':' || c == '-')
-                        })
-                        .map(|m| m.replace("-", ":"));
-
-                    if let Some(mac) = &mac {
-                        if let Some(entry) = self.scanned_ips.iter_mut().find(|e| e.ip == ip) {
-                            entry.mac = mac.clone();
-                            if let Some(oui) = &self.oui {
-                                if let Ok(Some(oui_res)) = oui.lookup_by_mac(mac) {
-                                    entry.vendor = oui_res.company_name.clone();
-                                }
-                            }
-                            log::debug!("MAC resolved: {} -> {} (vendor: {})", ip, mac, entry.vendor);
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-        log::warn!("No MAC found for {} after 3 retries", ip);
-    }
-
     fn process_ip(&mut self, ip: &str) {
-        let tx = self.action_tx.as_ref().unwrap();
-        let ipv4: Ipv4Addr = ip.parse().unwrap();
-        self.send_arp(ipv4);
-
-        // Add/update entry in scanned_ips first, then resolve MAC
-        let hostname = {
-            let hip: IpAddr = ip.parse().unwrap();
-            lookup_addr(&hip).unwrap_or_default()
-        };
-
-        if let Some(n) = self.scanned_ips.iter_mut().find(|item| item.ip == ip) {
-            n.hostname = hostname;
-            n.ip = ip.to_string();
-        } else {
+        // Add placeholder entry immediately so the table updates in real time.
+        if !self.scanned_ips.iter().any(|item| item.ip == ip) {
             self.scanned_ips.push(ScannedIp {
                 ip: ip.to_string(),
                 mac: String::new(),
-                hostname: hostname.clone(),
+                hostname: String::new(),
                 vendor: String::new(),
             });
+            self.sort_scanned_ips();
+            self.set_scrollbar_height();
         }
 
-        // Now resolve MAC from ARP cache
-        self.update_mac_from_arp_cache(ip);
+        // All blocking work (DNS + ARP probe + cache read) runs off the event loop.
+        let tx = self.action_tx.as_ref().unwrap().clone();
+        let ip_str = ip.to_string();
+        let interface = self.active_interface.clone();
 
-        // Sort IPs according to current sort mode
-        self.sort_scanned_ips();
+        tokio::spawn(async move {
+            // 1. Reverse-DNS lookup
+            let hip: IpAddr = ip_str.parse().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+            let hostname = tokio::task::spawn_blocking(move || {
+                lookup_addr(&hip).unwrap_or_default()
+            })
+            .await
+            .unwrap_or_default();
+
+            // 2. Send ARP probe so the OS ARP cache gets populated
+            if let Some(intf) = interface {
+                if let Ok(ipv4) = ip_str.parse::<Ipv4Addr>() {
+                    tokio::task::spawn_blocking(move || send_arp_to(&intf, ipv4))
+                        .await
+                        .ok();
+                }
+            }
+
+            // 3. Give the kernel ~300 ms to update its ARP cache
+            tokio::time::sleep(Duration::from_millis(300)).await;
+
+            // 4. Read MAC from ARP cache (non-sleeping, fast)
+            let ip_for_mac = ip_str.clone();
+            let mac = tokio::task::spawn_blocking(move || {
+                lookup_mac_from_arp(&ip_for_mac)
+            })
+            .await
+            .unwrap_or(None)
+            .unwrap_or_default();
+
+            tx.send(Action::IpResolved { ip: ip_str, hostname, mac }).ok();
+        });
     }
 
     fn set_active_subnet(&mut self, intf: &NetworkInterface) {
@@ -858,7 +829,7 @@ impl Component for Discovery {
                 Mode::Normal => return Ok(None),
                 Mode::Input => match key.code {
                     KeyCode::Enter => {
-                        if let Some(sender) = &self.action_tx {
+                        if self.action_tx.is_some() {
                             self.set_cidr(self.input.value().to_string(), true);
                         }
                         Action::ModeChange(Mode::Normal)
@@ -905,9 +876,26 @@ impl Component for Discovery {
         if let Action::CidrError = action {
             self.cidr_error = true;
         }
-        // -- ARP packet recieved
+        // -- ARP packet received (parallel MAC update from captured traffic)
         if let Action::ArpRecieve(ref arp_data) = action {
             self.process_mac(arp_data.clone());
+        }
+        // -- background IP resolution completed
+        if let Action::IpResolved { ref ip, ref hostname, ref mac } = action {
+            if let Some(entry) = self.scanned_ips.iter_mut().find(|e| e.ip == *ip) {
+                if !hostname.is_empty() {
+                    entry.hostname = hostname.clone();
+                }
+                if !mac.is_empty() && entry.mac.is_empty() {
+                    entry.mac = mac.clone();
+                    if let Some(oui) = &self.oui {
+                        if let Ok(Some(oui_res)) = oui.lookup_by_mac(mac) {
+                            entry.vendor = oui_res.company_name.clone();
+                        }
+                    }
+                }
+            }
+            self.sort_scanned_ips();
         }
         // -- Scan CIDR
         if let Action::ScanCidr = action {

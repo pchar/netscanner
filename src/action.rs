@@ -58,6 +58,11 @@ pub enum Action {
     ExportData(ExportData),
     StopScan,
     SortBy(SortColumn),
+    IpResolved {
+        ip: String,
+        hostname: String,
+        mac: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
