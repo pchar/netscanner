@@ -668,14 +668,13 @@ impl Discovery {
     }
 
     fn render_sort_menu(&self, f: &mut Frame<'_>, table_rect: Rect) {
-        // Calculate popup position - centered at the TOP of the table
-        let popup_height: u16 = 8;  // border(2) + title(1) + 4 options(4) + title_bottom(1)
+        let popup_height: u16 = 8;
         let popup_width: u16 = 40;
-        let x = table_rect.x + table_rect.width / 2 - popup_width / 2;
-        // Position at the top of the table area (y+1) instead of bottom
+        let center = table_rect.x.saturating_add(table_rect.width / 2);
+        let x = center.saturating_sub(popup_width / 2);
         let y = table_rect.y + 1;
 
-        let popup_rect = Rect::new(x as u16, y as u16, popup_width as u16, popup_height as u16);
+        let popup_rect = Rect::new(x, y, popup_width, popup_height);
 
         // Create the popup block with focus indicator
         let block = Block::default()
@@ -1002,7 +1001,8 @@ impl Component for Discovery {
 
             // -- ERROR
             if self.cidr_error {
-                let error_rect = Rect::new(table_rect.width - (19 + 41), table_rect.y + 1, 18, 3);
+                let ex = table_rect.width.saturating_sub(19 + 41);
+                let error_rect = Rect::new(ex, table_rect.y + 1, 18, 3);
                 let block = self.make_error();
                 f.render_widget(block, error_rect);
             }
@@ -1010,7 +1010,7 @@ impl Component for Discovery {
             // -- INPUT
             let input_size: u16 = INPUT_SIZE as u16;
             let input_rect = Rect::new(
-                table_rect.width - (input_size + 1),
+                table_rect.width.saturating_sub(input_size + 1),
                 table_rect.y + 1,
                 input_size,
                 3,
