@@ -77,6 +77,7 @@ pub struct Discovery {
     spinner_index: usize,
     sort_column: crate::action::SortColumn,
     showing_sort_menu: bool,
+    sort_selected_idx: usize,
 }
 
 impl Default for Discovery {
@@ -105,6 +106,7 @@ impl Discovery {
             spinner_index: 0,
             sort_column: crate::action::SortColumn::Ip,
             showing_sort_menu: false,
+            sort_selected_idx: 0,
         }
     }
 
@@ -708,32 +710,27 @@ impl Discovery {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
             .title(" Sort by: ".blue().bold())
-            .title_bottom(" Esc to close ".dark_gray());
+            .title_bottom(" Enter/↓ to select, Esc to close ".dark_gray());
 
         f.render_widget(block, popup_rect);
 
-        // Create list of sort options with F-key bindings
+        // Create list of sort options
         let options = vec![
-            ("F1", "IP"),
-            ("F2", "MAC"),
-            ("F3", "Hostname"),
-            ("F4", "Vendor"),
+            ("IP", crate::action::SortColumn::Ip),
+            ("MAC", crate::action::SortColumn::Mac),
+            ("Hostname", crate::action::SortColumn::Hostname),
+            ("Vendor", crate::action::SortColumn::Vendor),
         ];
 
         let items: Vec<ListItem> = options
             .iter()
-            .map(|(key, label)| {
-                let current = match self.sort_column {
-                    crate::action::SortColumn::Ip => "F1",
-                    crate::action::SortColumn::Mac => "F2",
-                    crate::action::SortColumn::Hostname => "F3",
-                    crate::action::SortColumn::Vendor => "F4",
-                };
-                let selected = key == &current;
+            .enumerate()
+            .map(|(idx, (label, _))| {
+                let selected = idx == self.sort_selected_idx;
                 if selected {
-                    ListItem::from(format!("> {} {}", key, label).cyan().bold().to_string())
+                    ListItem::from(format!("▶ {}", label).cyan().bold().to_string())
                 } else {
-                    ListItem::from(format!("  {} {}", key, label).dark_gray().to_string())
+                    ListItem::from(format!("  {}", label).dark_gray().to_string())
                 }
             })
             .collect();
@@ -790,31 +787,34 @@ impl Component for Discovery {
             // Handle sort menu when open
             if self.showing_sort_menu {
                 match key.code {
-                    KeyCode::F(1) => {
-                        if let Some(tx) = &self.action_tx {
-                            tx.send(Action::SortBy(crate::action::SortColumn::Ip)).ok();
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if self.sort_selected_idx > 0 {
+                            self.sort_selected_idx -= 1;
                         }
-                        self.showing_sort_menu = false;
                         return Ok(None);
                     }
-                    KeyCode::F(2) => {
-                        if let Some(tx) = &self.action_tx {
-                            tx.send(Action::SortBy(crate::action::SortColumn::Mac)).ok();
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if self.sort_selected_idx < 3 {
+                            self.sort_selected_idx += 1;
                         }
-                        self.showing_sort_menu = false;
                         return Ok(None);
                     }
-                    KeyCode::F(3) => {
+                    KeyCode::Enter => {
+                        let idx = self.sort_selected_idx;
                         if let Some(tx) = &self.action_tx {
-                            tx.send(Action::SortBy(crate::action::SortColumn::Hostname)).ok();
+                            tx.send(Action::SortBy(match idx {
+                                0 => crate::action::SortColumn::Ip,
+                                1 => crate::action::SortColumn::Mac,
+                                2 => crate::action::SortColumn::Hostname,
+                                _ => crate::action::SortColumn::Vendor,
+                            })).ok();
                         }
-                        self.showing_sort_menu = false;
-                        return Ok(None);
-                    }
-                    KeyCode::F(4) => {
-                        if let Some(tx) = &self.action_tx {
-                            tx.send(Action::SortBy(crate::action::SortColumn::Vendor)).ok();
-                        }
+                        self.sort_column = match idx {
+                            0 => crate::action::SortColumn::Ip,
+                            1 => crate::action::SortColumn::Mac,
+                            2 => crate::action::SortColumn::Hostname,
+                            _ => crate::action::SortColumn::Vendor,
+                        };
                         self.showing_sort_menu = false;
                         return Ok(None);
                     }
@@ -840,6 +840,15 @@ impl Component for Discovery {
             if !self.is_scanning && self.mode == Mode::Normal {
                 if key.code == KeyCode::Char('o') {
                     self.showing_sort_menu = !self.showing_sort_menu;
+                    if self.showing_sort_menu {
+                        // Initialize selection to current sort column
+                        self.sort_selected_idx = match self.sort_column {
+                            crate::action::SortColumn::Ip => 0,
+                            crate::action::SortColumn::Mac => 1,
+                            crate::action::SortColumn::Hostname => 2,
+                            crate::action::SortColumn::Vendor => 3,
+                        };
+                    }
                     return Ok(None);
                 }
             }
