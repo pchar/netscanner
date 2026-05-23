@@ -338,10 +338,55 @@ impl Discovery {
         }
     }
 
+    fn update_mac_from_arp_cache(&mut self, ip: &str) {
+        // On macOS/Linux, read the system ARP cache via `arp -a` command
+        // since ARP responses may not be visible on the wire
+        let output = std::process::Command::new("arp")
+            .arg("-a")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok());
+
+        if let Some(arp_output) = output {
+            for line in arp_output.lines() {
+                // macOS format: hostname (ip) at mac (type)
+                // Linux format: ip at mac type flags if on ...
+                if line.contains(ip) {
+                    // Extract MAC address (format: xx:xx:xx:xx:xx:xx or xx-xx-xx-xx-xx-xx)
+                    let mac = line
+                        .split_whitespace()
+                        .find(|part| {
+                            part.len() >= 12
+                                && (part.contains(':') || part.contains('-'))
+                                && part.chars().all(|c| c.is_ascii_hexdigit() || c == ':' || c == '-')
+                        })
+                        .map(|m| {
+                            m.replace("-", ":")
+                        });
+
+                    if let Some(mac) = mac.clone() {
+                        if let Some(entry) = self.scanned_ips.iter_mut().find(|e| e.ip == ip) {
+                            entry.mac = mac.clone();
+                            if let Some(oui) = &self.oui {
+                                if let Ok(Some(oui_res)) = oui.lookup_by_mac(&mac) {
+                                    entry.vendor = oui_res.company_name.clone();
+                                }
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     fn process_ip(&mut self, ip: &str) {
         let tx = self.action_tx.as_ref().unwrap();
         let ipv4: Ipv4Addr = ip.parse().unwrap();
         self.send_arp(ipv4);
+
+        // Also check system ARP cache since on macOS ARP responses may not be visible on the wire
+        self.update_mac_from_arp_cache(ip);
 
         if let Some(n) = self.scanned_ips.iter_mut().find(|item| item.ip == ip) {
             let hip: IpAddr = ip.parse().unwrap();
