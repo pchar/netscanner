@@ -60,8 +60,8 @@ impl App {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
 
         Ok(Self {
-            tick_rate: 1.0,
-            frame_rate: 10.0,
+            tick_rate,
+            frame_rate,
             components: vec![
                 Box::new(title),
                 Box::new(interfaces),
