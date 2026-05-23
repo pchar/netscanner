@@ -798,7 +798,8 @@ impl Component for Discovery {
             // -- TABLE
             let mut table_rect = layout.bottom;
             table_rect.y += 1;
-            table_rect.height -= 1;
+            // Shrink table height to leave room for input below
+            table_rect.height = table_rect.height.saturating_sub(3);
 
             let table =
                 Self::make_table(&self.scanned_ips, self.cidr, self.ip_num, self.is_scanning);
@@ -807,8 +808,8 @@ impl Component for Discovery {
             // -- SCROLLBAR
             let scrollbar = Self::make_scrollbar();
             let mut scroll_rect = table_rect;
-            scroll_rect.y += 3;
-            scroll_rect.height -= 3;
+            scroll_rect.y += 1;
+            scroll_rect.height = scroll_rect.height.saturating_sub(2);
             f.render_stateful_widget(
                 scrollbar,
                 scroll_rect.inner(Margin {
