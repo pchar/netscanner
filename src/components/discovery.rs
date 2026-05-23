@@ -755,94 +755,77 @@ impl Component for Discovery {
     }
 
     fn handle_key_events(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        if self.active_tab == TabsEnum::Discovery {
-            // Handle sort menu when open
+        if self.active_tab != TabsEnum::Discovery {
+            return Ok(None);
+        }
+
+        // Sort menu is open — consume ALL keys so global j/k/etc. don't fire.
+        if self.showing_sort_menu {
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if self.sort_selected_idx > 0 {
+                        self.sort_selected_idx -= 1;
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if self.sort_selected_idx < 3 {
+                        self.sort_selected_idx += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    let col = match self.sort_selected_idx {
+                        0 => crate::action::SortColumn::Ip,
+                        1 => crate::action::SortColumn::Mac,
+                        2 => crate::action::SortColumn::Hostname,
+                        _ => crate::action::SortColumn::Vendor,
+                    };
+                    self.sort_column = col.clone();
+                    self.showing_sort_menu = false;
+                    // Return the action so update() applies the sort.
+                    return Ok(Some(Action::SortBy(col)));
+                }
+                KeyCode::Esc => {
+                    self.showing_sort_menu = false;
+                }
+                _ => {}
+            }
+            // Key consumed by the sort menu — block global keymap.
+            return Ok(Some(Action::Refresh));
+        }
+
+        // `k` stops an active scan instead of navigating up.
+        if self.is_scanning && self.mode == Mode::Normal && key.code == KeyCode::Char('k') {
+            return Ok(Some(Action::StopScan));
+        }
+
+        // `o` toggles the sort menu (only when idle).
+        if !self.is_scanning && self.mode == Mode::Normal && key.code == KeyCode::Char('o') {
+            self.showing_sort_menu = !self.showing_sort_menu;
             if self.showing_sort_menu {
-                match key.code {
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if self.sort_selected_idx > 0 {
-                            self.sort_selected_idx -= 1;
-                        }
-                        return Ok(None);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if self.sort_selected_idx < 3 {
-                            self.sort_selected_idx += 1;
-                        }
-                        return Ok(None);
-                    }
-                    KeyCode::Enter => {
-                        let idx = self.sort_selected_idx;
-                        if let Some(tx) = &self.action_tx {
-                            tx.send(Action::SortBy(match idx {
-                                0 => crate::action::SortColumn::Ip,
-                                1 => crate::action::SortColumn::Mac,
-                                2 => crate::action::SortColumn::Hostname,
-                                _ => crate::action::SortColumn::Vendor,
-                            })).ok();
-                        }
-                        self.sort_column = match idx {
-                            0 => crate::action::SortColumn::Ip,
-                            1 => crate::action::SortColumn::Mac,
-                            2 => crate::action::SortColumn::Hostname,
-                            _ => crate::action::SortColumn::Vendor,
-                        };
-                        self.showing_sort_menu = false;
-                        return Ok(None);
-                    }
-                    KeyCode::Esc => {
-                        self.showing_sort_menu = false;
-                        return Ok(None);
-                    }
-                    _ => return Ok(None),
-                }
+                self.sort_selected_idx = match self.sort_column {
+                    crate::action::SortColumn::Ip => 0,
+                    crate::action::SortColumn::Mac => 1,
+                    crate::action::SortColumn::Hostname => 2,
+                    crate::action::SortColumn::Vendor => 3,
+                };
             }
+            return Ok(Some(Action::Refresh));
+        }
 
-            // Override `k` navigation with StopScan when actively scanning
-            if self.is_scanning && self.mode == Mode::Normal {
-                if key.code == KeyCode::Char('k') {
-                    if let Some(tx) = &self.action_tx {
-                        tx.send(Action::StopScan).ok();
+        match self.mode {
+            Mode::Normal => Ok(None),
+            Mode::Input => match key.code {
+                KeyCode::Enter => {
+                    if self.action_tx.is_some() {
+                        self.set_cidr(self.input.value().to_string(), true);
                     }
-                    return Ok(None);
+                    Ok(Some(Action::ModeChange(Mode::Normal)))
                 }
-            }
-
-            // `o` toggles sort menu
-            if !self.is_scanning && self.mode == Mode::Normal {
-                if key.code == KeyCode::Char('o') {
-                    self.showing_sort_menu = !self.showing_sort_menu;
-                    if self.showing_sort_menu {
-                        // Initialize selection to current sort column
-                        self.sort_selected_idx = match self.sort_column {
-                            crate::action::SortColumn::Ip => 0,
-                            crate::action::SortColumn::Mac => 1,
-                            crate::action::SortColumn::Hostname => 2,
-                            crate::action::SortColumn::Vendor => 3,
-                        };
-                    }
-                    return Ok(None);
+                _ => {
+                    self.input.handle_event(&Event::Key(key));
+                    Ok(Some(Action::Refresh))
                 }
-            }
-
-            let action = match self.mode {
-                Mode::Normal => return Ok(None),
-                Mode::Input => match key.code {
-                    KeyCode::Enter => {
-                        if self.action_tx.is_some() {
-                            self.set_cidr(self.input.value().to_string(), true);
-                        }
-                        Action::ModeChange(Mode::Normal)
-                    }
-                    _ => {
-                        self.input.handle_event(&Event::Key(key));
-                        return Ok(None);
-                    }
-                },
-            };
-            Ok(Some(action))
-        } else {
-            Ok(None)
+            },
         }
     }
 
