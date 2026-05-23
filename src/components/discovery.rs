@@ -698,7 +698,7 @@ impl Discovery {
 
     fn render_sort_menu(&self, f: &mut Frame<'_>, table_rect: Rect) {
         // Calculate popup position - centered at the TOP of the table
-        let popup_height: u16 = 5;
+        let popup_height: u16 = 8;  // border(2) + title(1) + 4 options(4) + title_bottom(1)
         let popup_width: u16 = 40;
         let x = table_rect.x + table_rect.width / 2 - popup_width / 2;
         // Position at the top of the table area (y+1) instead of bottom
