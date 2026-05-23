@@ -826,11 +826,11 @@ impl Component for Discovery {
                 f.render_widget(block, error_rect);
             }
 
-            // -- INPUT
+            // -- INPUT (positioned below table so bottom titles are visible)
             let input_size: u16 = INPUT_SIZE as u16;
             let input_rect = Rect::new(
-                table_rect.width - (input_size + 1),
-                table_rect.y + 1,
+                table_rect.x + table_rect.width - input_size - 1,
+                table_rect.y + table_rect.height + 1,  // BELOW the table
                 input_size,
                 2,
             );
