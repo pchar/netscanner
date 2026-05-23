@@ -9,7 +9,7 @@ use ratatui::{prelude::*, widgets::*};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
@@ -49,6 +49,10 @@ fn ping_host(ip: &str) -> bool {
 
     std::process::Command::new("ping")
         .args(args)
+        // Isolate all stdio so child processes never share the terminal.
+        // Without this the kernel may route keystrokes to a subprocess
+        // instead of crossterm, making the UI appear frozen.
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
@@ -60,6 +64,7 @@ fn ping_host(ip: &str) -> bool {
 fn resolve_hostname(ip: &str) -> String {
     if let Ok(out) = std::process::Command::new("dig")
         .args(["-x", ip, "+short", "+time=2", "+tries=1"])
+        .stdin(std::process::Stdio::null())
         .output()
     {
         let s = String::from_utf8_lossy(&out.stdout);
@@ -70,7 +75,11 @@ fn resolve_hostname(ip: &str) -> String {
             }
         }
     }
-    if let Ok(out) = std::process::Command::new("nslookup").arg(ip).output() {
+    if let Ok(out) = std::process::Command::new("nslookup")
+        .args(["-timeout=2", ip])
+        .stdin(std::process::Stdio::null())
+        .output()
+    {
         let s = String::from_utf8_lossy(&out.stdout);
         for line in s.lines() {
             if let Some(pos) = line.find("name = ") {
@@ -83,7 +92,11 @@ fn resolve_hostname(ip: &str) -> String {
 
 /// Read MAC from the OS ARP cache. Ping the host first to populate it.
 fn get_mac(ip: &str) -> String {
-    let out = match std::process::Command::new("arp").args(["-n", ip]).output() {
+    let out = match std::process::Command::new("arp")
+        .args(["-n", ip])
+        .stdin(std::process::Stdio::null())
+        .output()
+    {
         Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
         Err(_) => return String::new(),
     };
@@ -104,13 +117,16 @@ fn get_mac(ip: &str) -> String {
 // Thread-pool scanner with coordinator
 //
 // Layout:
-//   start() fills a shared work queue with all IPs, then spawns `pool_size`
-//   worker threads. Each worker pulls IPs from the queue, pings them, and
-//   reports live ones via the action channel. A coordinator thread blocks
-//   until every worker exits, then sends ScanComplete.
+//   start() divides the IP list evenly across `pool_size` worker threads.
+//   Each worker pings its slice sequentially and reports via the action
+//   channel. A coordinator thread blocks until every worker exits (by waiting
+//   for all done_tx clones to drop), then sends ScanComplete.
 //
-// stop() sets a flag that workers check between steps; they exit cleanly
-// within at most one ping-timeout (1 second) of the flag being set.
+//   CountIp is sent immediately after each ping so the progress counter
+//   updates in real time, independent of how long DNS/MAC lookup takes.
+//
+// stop() sets a flag; workers check it between IPs and exit within at most
+// one ping-timeout (1 second).
 // ---------------------------------------------------------------------------
 
 struct Scanner {
@@ -141,55 +157,44 @@ impl Scanner {
             return;
         }
 
-        // Shared work queue — workers pull IPs from here.
-        let (work_tx, work_rx) = std::sync::mpsc::channel::<String>();
-        let work_rx = Arc::new(Mutex::new(work_rx));
-        for ip in ips {
-            work_tx.send(ip.to_string()).ok();
-        }
-        drop(work_tx); // closes queue; workers see Err when it empties
-
         // Each worker clones done_tx. When the last clone drops, done_rx
         // unblocks and the coordinator knows all workers have exited.
         let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
 
+        // Divide IPs evenly across workers — no shared queue, no Mutex.
         let actual_pool = pool_size.min(total);
-        for _ in 0..actual_pool {
-            let work_rx = work_rx.clone();
+        let chunk_size = total.div_ceil(actual_pool);
+        let ip_strings: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
+
+        for chunk in ip_strings.chunks(chunk_size) {
+            let slice: Vec<String> = chunk.to_vec();
             let tx = action_tx.clone();
             let stop = stop_flag.clone();
             let done_tx = done_tx.clone();
 
             std::thread::spawn(move || {
-                loop {
-                    // Pull next IP from shared queue.
-                    let ip = {
-                        let rx = work_rx.lock().unwrap();
-                        match rx.recv() {
-                            Ok(ip) => ip,
-                            Err(_) => break, // queue exhausted
-                        }
-                    };
-
+                for ip in slice {
                     if stop.load(Ordering::Relaxed) {
                         break;
                     }
 
                     if ping_host(&ip) {
-                        // Report live host immediately so the table updates.
+                        // Show host immediately; details arrive via IpResolved.
                         tx.send(Action::PingIpResponded(ip.clone())).ok();
+                        // Count right after ping — progress updates independently
+                        // of how long DNS/MAC lookup takes.
+                        tx.send(Action::CountIp).ok();
 
                         if !stop.load(Ordering::Relaxed) {
                             let hostname = resolve_hostname(&ip);
-                            // Small pause so the OS ARP cache fills after ping.
+                            // Brief pause so the OS ARP cache fills after ping.
                             std::thread::sleep(Duration::from_millis(150));
                             let mac = get_mac(&ip);
                             tx.send(Action::IpResolved { ip, hostname, mac }).ok();
                         }
+                    } else {
+                        tx.send(Action::CountIp).ok();
                     }
-
-                    // Always count — drives the progress display.
-                    tx.send(Action::CountIp).ok();
                 }
                 drop(done_tx); // signals this worker is done
             });
