@@ -57,7 +57,15 @@ pub enum Action {
     Export,
     ExportData(ExportData),
     StopScan,
-    SortByHostname,
+    SortBy(SortColumn),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SortColumn {
+    Ip,
+    Mac,
+    Hostname,
+    Vendor,
 }
 
 impl<'de> Deserialize<'de> for Action {

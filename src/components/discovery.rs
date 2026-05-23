@@ -75,7 +75,8 @@ pub struct Discovery {
     table_state: TableState,
     scrollbar_state: ScrollbarState,
     spinner_index: usize,
-    sort_by_hostname: bool,
+    sort_column: crate::action::SortColumn,
+    showing_sort_menu: bool,
 }
 
 impl Default for Discovery {
@@ -102,7 +103,8 @@ impl Discovery {
             table_state: TableState::default().with_selected(0),
             scrollbar_state: ScrollbarState::new(0),
             spinner_index: 0,
-            sort_by_hostname: false,
+            sort_column: crate::action::SortColumn::Ip,
+            showing_sort_menu: false,
         }
     }
 
@@ -111,18 +113,31 @@ impl Discovery {
     }
 
     fn sort_scanned_ips(&mut self) {
-        if self.sort_by_hostname {
-            self.scanned_ips.sort_by(|a, b| {
-                a.hostname
-                    .to_lowercase()
-                    .cmp(&b.hostname.to_lowercase())
-            });
-        } else {
-            self.scanned_ips.sort_by(|a, b| {
-                let a_ip: Ipv4Addr = a.ip.parse().unwrap_or_else(|_| Ipv4Addr::new(0, 0, 0, 0));
-                let b_ip: Ipv4Addr = b.ip.parse().unwrap_or_else(|_| Ipv4Addr::new(0, 0, 0, 0));
-                a_ip.cmp(&b_ip)
-            });
+        match self.sort_column {
+            crate::action::SortColumn::Hostname => {
+                self.scanned_ips.sort_by(|a, b| {
+                    a.hostname
+                        .to_lowercase()
+                        .cmp(&b.hostname.to_lowercase())
+                });
+            }
+            crate::action::SortColumn::Mac => {
+                self.scanned_ips.sort_by(|a, b| a.mac.to_lowercase().cmp(&b.mac.to_lowercase()));
+            }
+            crate::action::SortColumn::Vendor => {
+                self.scanned_ips.sort_by(|a, b| {
+                    a.vendor.to_lowercase().cmp(&b.vendor.to_lowercase())
+                });
+            }
+            crate::action::SortColumn::Ip => {
+                self.scanned_ips.sort_by(|a, b| {
+                    let a_ip: Ipv4Addr =
+                        a.ip.parse().unwrap_or_else(|_| Ipv4Addr::new(0, 0, 0, 0));
+                    let b_ip: Ipv4Addr =
+                        b.ip.parse().unwrap_or_else(|_| Ipv4Addr::new(0, 0, 0, 0));
+                    a_ip.cmp(&b_ip)
+                });
+            }
         }
         self.set_scrollbar_height();
     }
@@ -501,13 +516,13 @@ impl Discovery {
         self.scrollbar_state = self.scrollbar_state.position(index);
     }
 
-    fn make_table(
-        scanned_ips: &Vec<ScannedIp>,
+    fn make_table<'a>(
+        scanned_ips: &'a Vec<ScannedIp>,
         cidr: Option<Ipv4Cidr>,
         ip_num: i32,
         is_scanning: bool,
-        sort_by_hostname: bool,
-    ) -> Table<'_> {
+        sort_column: &'a crate::action::SortColumn,
+    ) -> Table<'a> {
         let header = Row::new(vec!["ip", "mac", "hostname", "vendor"])
             .style(Style::default().fg(Color::Yellow))
             .top_margin(1)
@@ -570,28 +585,30 @@ impl Discovery {
                 ratatui::widgets::block::Title::from(Line::from(scan_title))
                     .position(ratatui::widgets::block::Position::Top)
                     .alignment(Alignment::Left),
-            )
-            .title(
-                ratatui::widgets::block::Title::from(Line::from(vec![
-                    Span::styled("|", Style::default().fg(Color::Yellow)),
-                    Span::styled(
-                        "s",
-                        Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
-                    ),
-                    Span::styled("ort ", Style::default().fg(Color::Yellow)),
-                    if sort_by_hostname {
-                        Span::styled("hostname", Style::default().fg(Color::Yellow))
-                    } else {
-                        Span::styled("ip", Style::default().fg(Color::Yellow))
-                    },
-                    Span::styled("|", Style::default().fg(Color::Yellow)),
-                ]))
-                .position(ratatui::widgets::block::Position::Bottom)
-                .alignment(Alignment::Right),
-            )
-            .border_style(Style::default().fg(Color::Rgb(100, 100, 100)))
-            .borders(Borders::ALL)
-            .border_type(DEFAULT_BORDER_STYLE);
+            );
+
+        // Show sort column name
+        let sort_col_label = match sort_column {
+            crate::action::SortColumn::Hostname => "hostname",
+            crate::action::SortColumn::Mac => "mac",
+            crate::action::SortColumn::Vendor => "vendor",
+            crate::action::SortColumn::Ip => "ip",
+        };
+
+        block = block.title(
+            ratatui::widgets::block::Title::from(Line::from(vec![
+                Span::styled("|", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    "o",
+                    Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+                ),
+                Span::styled("rder ", Style::default().fg(Color::Yellow)),
+                Span::styled(sort_col_label, Style::default().fg(Color::Yellow)),
+                Span::styled("|", Style::default().fg(Color::Yellow)),
+            ]))
+            .position(ratatui::widgets::block::Position::Bottom)
+            .alignment(Alignment::Right),
+        );
 
         // Show "stop k" command when scanning
         if is_scanning {
@@ -677,6 +694,59 @@ impl Discovery {
         input
     }
 
+    fn render_sort_menu(&self, f: &mut Frame<'_>, table_rect: Rect) {
+        // Calculate popup position - centered above the input bar
+        let popup_height: u16 = 5;
+        let popup_width: u16 = 40;
+        let x = table_rect.x + table_rect.width / 2 - popup_width / 2;
+        let y = table_rect.y + table_rect.height - popup_height + 1;
+
+        let popup_rect = Rect::new(x as u16, y as u16, popup_width as u16, popup_height as u16);
+
+        // Create the popup block
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" Sort by: ".blue())
+            .title_bottom(" q/ESC to close ".dark_gray());
+
+        f.render_widget(block, popup_rect);
+
+        // Create list of sort options
+        let options = vec![
+            ("1", "IP"),
+            ("2", "MAC"),
+            ("3", "Hostname"),
+            ("4", "Vendor"),
+        ];
+
+        let items: Vec<ListItem> = options
+            .iter()
+            .map(|(key, label)| {
+                let current = match self.sort_column {
+                    crate::action::SortColumn::Ip => "1",
+                    crate::action::SortColumn::Mac => "2",
+                    crate::action::SortColumn::Hostname => "3",
+                    crate::action::SortColumn::Vendor => "4",
+                };
+                let selected = key == &current;
+                if selected {
+                    ListItem::from(
+                        format!("> {} {}", key, label)
+                            .cyan()
+                            .bold()
+                            .to_string(),
+                    )
+                } else {
+                    ListItem::from(format!("  {} {}", key, label).dark_gray().to_string())
+                }
+            })
+            .collect();
+
+        let list = List::new(items).block(Block::default().padding(Padding::new(0, 1, 0, 1)));
+        f.render_widget(list, popup_rect.inner(Margin { vertical: 1, horizontal: 0 }));
+    }
+
     fn make_error(&mut self) -> Paragraph<'_> {
         let error = Paragraph::new("CIDR parse error")
             .style(Style::default().fg(Color::Red))
@@ -722,6 +792,45 @@ impl Component for Discovery {
 
     fn handle_key_events(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if self.active_tab == TabsEnum::Discovery {
+            // Handle sort menu when open
+            if self.showing_sort_menu {
+                match key.code {
+                    KeyCode::Char('1') => {
+                        if let Some(tx) = &self.action_tx {
+                            tx.send(Action::SortBy(crate::action::SortColumn::Ip)).ok();
+                        }
+                        self.showing_sort_menu = false;
+                        return Ok(None);
+                    }
+                    KeyCode::Char('2') => {
+                        if let Some(tx) = &self.action_tx {
+                            tx.send(Action::SortBy(crate::action::SortColumn::Mac)).ok();
+                        }
+                        self.showing_sort_menu = false;
+                        return Ok(None);
+                    }
+                    KeyCode::Char('3') => {
+                        if let Some(tx) = &self.action_tx {
+                            tx.send(Action::SortBy(crate::action::SortColumn::Hostname)).ok();
+                        }
+                        self.showing_sort_menu = false;
+                        return Ok(None);
+                    }
+                    KeyCode::Char('4') => {
+                        if let Some(tx) = &self.action_tx {
+                            tx.send(Action::SortBy(crate::action::SortColumn::Vendor)).ok();
+                        }
+                        self.showing_sort_menu = false;
+                        return Ok(None);
+                    }
+                    KeyCode::Esc | KeyCode::Char('q') => {
+                        self.showing_sort_menu = false;
+                        return Ok(None);
+                    }
+                    _ => return Ok(None),
+                }
+            }
+
             // Override `k` navigation with StopScan when actively scanning
             if self.is_scanning && self.mode == Mode::Normal {
                 if key.code == KeyCode::Char('k') {
@@ -732,12 +841,10 @@ impl Component for Discovery {
                 }
             }
 
-            // `o` toggles hostname sorting
+            // `o` toggles sort menu
             if !self.is_scanning && self.mode == Mode::Normal {
                 if key.code == KeyCode::Char('o') {
-                    if let Some(tx) = &self.action_tx {
-                        tx.send(Action::SortByHostname).ok();
-                    }
+                    self.showing_sort_menu = !self.showing_sort_menu;
                     return Ok(None);
                 }
             }
@@ -807,10 +914,15 @@ impl Component for Discovery {
             }
         }
 
-        // -- Sort by hostname toggle
-        if let Action::SortByHostname = action {
-            self.sort_by_hostname = !self.sort_by_hostname;
+        // -- Sort by column
+        if let Action::SortBy(ref column) = action {
+            self.sort_column = column.clone();
             self.sort_scanned_ips();
+        }
+
+        // -- Toggle sort menu
+        if let Action::Help = action {
+            self.showing_sort_menu = !self.showing_sort_menu;
         }
 
         // -- Stop Scan
@@ -889,7 +1001,7 @@ impl Component for Discovery {
                 self.cidr,
                 self.ip_num,
                 self.is_scanning,
-                self.sort_by_hostname,
+                &self.sort_column,
             );
             f.render_stateful_widget(table, table_rect, &mut self.table_state);
 
@@ -906,6 +1018,11 @@ impl Component for Discovery {
                 }),
                 &mut self.scrollbar_state,
             );
+
+            // -- SORT MENU POPUP
+            if self.showing_sort_menu {
+                self.render_sort_menu(f, table_rect);
+            }
 
             // -- ERROR
             if self.cidr_error {
