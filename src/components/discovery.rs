@@ -341,7 +341,7 @@ impl Discovery {
     fn process_ip(&mut self, ip: &str) {
         let tx = self.action_tx.as_ref().unwrap();
         let ipv4: Ipv4Addr = ip.parse().unwrap();
-        // self.send_arp(ipv4);
+        self.send_arp(ipv4);
 
         if let Some(n) = self.scanned_ips.iter_mut().find(|item| item.ip == ip) {
             let hip: IpAddr = ip.parse().unwrap();
