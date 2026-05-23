@@ -576,31 +576,25 @@ impl Discovery {
                         ratatui::widgets::block::Title::from(Line::from(vec![
                             Span::raw("|"),
                             Span::styled(
-                                "i",
-                                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
-                            ),
-                            Span::styled("nput", Style::default().fg(Color::Yellow)),
-                            Span::raw("/"),
-                            Span::styled(
-                                "ESC",
-                                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
-                            ),
-                            Span::raw("|"),
-                        ]))
-                        .alignment(Alignment::Right)
-                        .position(ratatui::widgets::block::Position::Bottom),
-                    )
-                    .title(
-                        ratatui::widgets::block::Title::from(Line::from(vec![
-                            Span::raw("|"),
-                            Span::styled(
                                 "s",
                                 Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
                             ),
                             Span::styled("can", Style::default().fg(Color::Yellow)),
+                            Span::raw(" "),
+                            Span::styled(
+                                "k",
+                                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+                            ),
+                            Span::styled("ill", Style::default().fg(Color::Yellow)),
+                            Span::raw(" "),
+                            Span::styled(
+                                "i",
+                                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+                            ),
+                            Span::styled("nput/ESC", Style::default().fg(Color::Yellow)),
                             Span::raw("|"),
                         ]))
-                        .alignment(Alignment::Left)
+                        .alignment(Alignment::Center)
                         .position(ratatui::widgets::block::Position::Bottom),
                     ),
             );
