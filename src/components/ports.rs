@@ -197,7 +197,7 @@ impl Ports {
         }
     }
 
-    fn make_list(&self, rect: Rect) -> List<'_> {
+    fn make_list(&self, rect: Rect) -> List<'static> {
         let mut items = Vec::new();
         for ip in &self.ip_ports {
             let mut lines = Vec::new();
@@ -367,7 +367,7 @@ impl Component for Ports {
 
             // -- LIST
             let list = self.make_list(list_rect);
-            f.render_stateful_widget(list, list_rect, &mut self.list_state.clone());
+            f.render_stateful_widget(list, list_rect, &mut self.list_state);
 
             // -- SCROLLBAR
             let scrollbar = Self::make_scrollbar();

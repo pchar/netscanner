@@ -1205,7 +1205,7 @@ impl Component for PacketDump {
             }
             let rows = self.get_table_rows_by_packet_type(self.packet_type);
             let table = Self::make_table(rows, self.packet_type, dump_paused);
-            f.render_stateful_widget(table, table_rect, &mut self.table_state.clone());
+            f.render_stateful_widget(table, table_rect, &mut self.table_state);
 
             // -- INPUT
             let input_size: u16 = INPUT_SIZE as u16;
