@@ -56,6 +56,7 @@ pub enum Action {
     Export,
     ExportData(ExportData),
     StopScan,
+    ScanComplete,
     SortBy(SortColumn),
     IpResolved {
         ip: String,
