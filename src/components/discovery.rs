@@ -75,6 +75,7 @@ pub struct Discovery {
     table_state: TableState,
     scrollbar_state: ScrollbarState,
     spinner_index: usize,
+    sort_by_hostname: bool,
 }
 
 impl Default for Discovery {
@@ -101,11 +102,29 @@ impl Discovery {
             table_state: TableState::default().with_selected(0),
             scrollbar_state: ScrollbarState::new(0),
             spinner_index: 0,
+            sort_by_hostname: false,
         }
     }
 
     pub fn get_scanned_ips(&self) -> &Vec<ScannedIp> {
         &self.scanned_ips
+    }
+
+    fn sort_scanned_ips(&mut self) {
+        if self.sort_by_hostname {
+            self.scanned_ips.sort_by(|a, b| {
+                a.hostname
+                    .to_lowercase()
+                    .cmp(&b.hostname.to_lowercase())
+            });
+        } else {
+            self.scanned_ips.sort_by(|a, b| {
+                let a_ip: Ipv4Addr = a.ip.parse().unwrap_or_else(|_| Ipv4Addr::new(0, 0, 0, 0));
+                let b_ip: Ipv4Addr = b.ip.parse().unwrap_or_else(|_| Ipv4Addr::new(0, 0, 0, 0));
+                a_ip.cmp(&b_ip)
+            });
+        }
+        self.set_scrollbar_height();
     }
 
     fn set_cidr(&mut self, cidr_str: String, scan: bool) {
@@ -412,13 +431,8 @@ impl Discovery {
         // Now resolve MAC from ARP cache
         self.update_mac_from_arp_cache(ip);
 
-        self.scanned_ips.sort_by(|a, b| {
-            let a_ip: Ipv4Addr = a.ip.parse::<Ipv4Addr>().unwrap();
-            let b_ip: Ipv4Addr = b.ip.parse::<Ipv4Addr>().unwrap();
-            a_ip.partial_cmp(&b_ip).unwrap()
-        });
-
-        self.set_scrollbar_height();
+        // Sort IPs according to current sort mode
+        self.sort_scanned_ips();
     }
 
     fn set_active_subnet(&mut self, intf: &NetworkInterface) {
@@ -492,6 +506,7 @@ impl Discovery {
         cidr: Option<Ipv4Cidr>,
         ip_num: i32,
         is_scanning: bool,
+        sort_by_hostname: bool,
     ) -> Table<'_> {
         let header = Row::new(vec!["ip", "mac", "hostname", "vendor"])
             .style(Style::default().fg(Color::Yellow))
@@ -559,9 +574,17 @@ impl Discovery {
             .title(
                 ratatui::widgets::block::Title::from(Line::from(vec![
                     Span::styled("|", Style::default().fg(Color::Yellow)),
-                    String::from(char::from_u32(0x25b2).unwrap_or('>')).red(),
-                    String::from(char::from_u32(0x25bc).unwrap_or('>')).red(),
-                    Span::styled("select|", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        "s",
+                        Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+                    ),
+                    Span::styled("ort ", Style::default().fg(Color::Yellow)),
+                    if sort_by_hostname {
+                        Span::styled("hostname", Style::default().fg(Color::Yellow))
+                    } else {
+                        Span::styled("ip", Style::default().fg(Color::Yellow))
+                    },
+                    Span::styled("|", Style::default().fg(Color::Yellow)),
                 ]))
                 .position(ratatui::widgets::block::Position::Bottom)
                 .alignment(Alignment::Right),
@@ -709,6 +732,16 @@ impl Component for Discovery {
                 }
             }
 
+            // `o` toggles hostname sorting
+            if !self.is_scanning && self.mode == Mode::Normal {
+                if key.code == KeyCode::Char('o') {
+                    if let Some(tx) = &self.action_tx {
+                        tx.send(Action::SortByHostname).ok();
+                    }
+                    return Ok(None);
+                }
+            }
+
             let action = match self.mode {
                 Mode::Normal => return Ok(None),
                 Mode::Input => match key.code {
@@ -772,6 +805,12 @@ impl Component for Discovery {
             {
                 self.scan();
             }
+        }
+
+        // -- Sort by hostname toggle
+        if let Action::SortByHostname = action {
+            self.sort_by_hostname = !self.sort_by_hostname;
+            self.sort_scanned_ips();
         }
 
         // -- Stop Scan
@@ -845,8 +884,13 @@ impl Component for Discovery {
             table_rect.y += 1;
             table_rect.height -= 1;
 
-            let table =
-                Self::make_table(&self.scanned_ips, self.cidr, self.ip_num, self.is_scanning);
+            let table = Self::make_table(
+                &self.scanned_ips,
+                self.cidr,
+                self.ip_num,
+                self.is_scanning,
+                self.sort_by_hostname,
+            );
             f.render_stateful_widget(table, table_rect, &mut self.table_state);
 
             // -- SCROLLBAR

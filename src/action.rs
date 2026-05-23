@@ -57,6 +57,7 @@ pub enum Action {
     Export,
     ExportData(ExportData),
     StopScan,
+    SortByHostname,
 }
 
 impl<'de> Deserialize<'de> for Action {
