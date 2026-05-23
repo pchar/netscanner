@@ -43,6 +43,10 @@ pub fn get_ips4_from_cidr(cidr: Ipv4Cidr) -> Vec<Ipv4Addr> {
 }
 
 pub fn count_ipv4_net_length(net_length: u32) -> u32 {
+    // net_length == 0 → 2^32 overflows u32; use saturating for safety.
+    if net_length == 0 {
+        return u32::MAX;
+    }
     2u32.pow(32 - net_length)
 }
 
